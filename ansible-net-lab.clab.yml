@@ -1,0 +1,49 @@
+name: ybettan-ansible-net-lab
+
+topology:
+  kinds:
+    cvx:
+      image: networkop/cx:5.3.0
+    linux:
+      image: alpine:3.19
+
+  nodes:
+    # Spine switch
+    spine:
+      kind: cvx
+      binds:
+        - /lib/modules:/lib/modules:ro
+
+    # Leaf switches
+    leaf-1:
+      kind: cvx
+      binds:
+        - /lib/modules:/lib/modules:ro
+
+    leaf-2:
+      kind: cvx
+      binds:
+        - /lib/modules:/lib/modules:ro
+
+    # Linux hosts simulating bare-metal workers
+    host-1:
+      kind: linux
+
+    host-2:
+      kind: linux
+
+    # Linux gateway node (SNAT/DNAT -- replaces Netris SoftGate)
+    gw-node:
+      kind: linux
+
+  links:
+    # Spine <-> Leaf uplinks
+    - endpoints: ["spine:swp1", "leaf-1:swp1"]
+    - endpoints: ["spine:swp2", "leaf-2:swp1"]
+
+    # Leaf-1 <-> hosts
+    - endpoints: ["leaf-1:swp2", "host-1:eth1"]
+    - endpoints: ["leaf-1:swp3", "gw-node:eth1"]
+
+    # Leaf-2 <-> hosts
+    - endpoints: ["leaf-2:swp2", "host-2:eth1"]
