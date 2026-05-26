@@ -179,7 +179,46 @@ docker exec clab-ybettan-ansible-net-lab-host-2 ping -c 2 10.100.0.10
 
 **Result:** Bidirectional L2 connectivity across VXLAN/EVPN fabric ✓
 
-Tenant isolation test (Step 10 second part — creating tenant-b for isolation) deferred to Phase 6.
+### Consolidation — Automated setup and tenant isolation
+
+Consolidated all manual steps into an automated, reproducible deployment:
+
+**Topology update:**
+- Added `host-3` on `leaf-2:swp3` for tenant-b isolation testing
+- Assigned static management IPs in topology file (no more DHCP randomization):
+  - spine: `172.20.20.10`, leaf-1: `172.20.20.11`, leaf-2: `172.20.20.12`
+  - host-1: `172.20.20.20`, host-2: `172.20.20.21`, host-3: `172.20.20.22`
+  - gw-node: `172.20.20.30`
+
+**Playbook consolidation:**
+- Merged `configure_tenant.yml` + `configure_tenant_b.yml` → `configure_network.yml`
+- Single playbook configures underlay (spine BGP) + tenant-a (both leaves) + tenant-b (leaf-2 only)
+- `advertise-all-vni` runs last on each leaf, after all `nv config apply` calls (NVUE regenerates FRR config and drops vtysh-only settings)
+- Merged vars into `ansible/vars/all.yml` (fabric + tenant-a + tenant-b)
+- Added `UserKnownHostsFile=/dev/null` to SSH args (stale host keys after redeploy)
+
+**Setup script (`setup-lab.sh`):**
+- Full zero-to-working automation: deploy → wait → fix sudo → configure → assign IPs → verify
+- Parallel SSH readiness checks on all switches
+- ARP warm-up pings before verification tests
+- `./setup-lab.sh destroy` for teardown
+
+**Tenant isolation test (Step 10 — COMPLETE):**
+
+```
+==> Running verification tests...
+
+  [PASS] host-1 (tenant-a) -> host-2 (tenant-a)
+  [PASS] host-2 (tenant-a) -> host-1 (tenant-a)
+  [PASS] host-1 (tenant-a) -> host-3 (tenant-b) — unreachable (isolation works)
+  [PASS] host-2 (tenant-a) -> host-3 (tenant-b) — unreachable (isolation works)
+
+==> All tests passed!
+```
+
+- host-1 (10.100.0.10, VLAN 100, VRF tenant-a) ↔ host-2 (10.100.0.20, VLAN 100, VRF tenant-a): **PASS**
+- host-1 → host-3 (10.200.0.20, VLAN 200, VRF tenant-b): **unreachable** (isolation works)
+- host-2 → host-3 (same leaf, different VRF): **unreachable** (isolation works)
 
 ---
 

@@ -1,26 +1,15 @@
 ---
-# Configures a single tenant on both leaf switches using NVUE (nv set):
-#   - VRF for L3 isolation
-#   - VLAN on the server-facing port
-#   - L2 VNI (VXLAN tunnel for bridged traffic)
-#   - L3 VNI (VXLAN tunnel for routed traffic)
-#   - BGP underlay between leaves and spine (eBGP)
-#   - EVPN overlay to extend the tenant network across leaves
+# Configures the full EVPN/VXLAN fabric in one shot:
+#   1. BGP underlay (spine + both leaves)
+#   2. Tenant-a overlay on both leaves (VLAN 100, VNI 10100)
+#   3. Tenant-b overlay on leaf-2 only (VLAN 200, VNI 10200)
+#   4. advertise-all-vni via vtysh (must run last, after all nv config apply)
 #
-# Variables (pass via -e or group_vars):
-#   tenant_name:   e.g. "tenant-a"
-#   tenant_vlan:   e.g. 100
-#   tenant_l2_vni: e.g. 10100
-#   tenant_l3_vni: e.g. 10001
-#   tenant_subnet: e.g. "10.100.0.0/24"
-#   leaf1_loopback: e.g. "10.0.0.1/32"
-#   leaf2_loopback: e.g. "10.0.0.2/32"
-#   spine_loopback: e.g. "10.0.0.3/32"
-#   leaf1_asn: e.g. 65001
-#   leaf2_asn: e.g. 65002
-#   spine_asn: e.g. 65000
+# Usage:
+#   ansible-playbook -i ansible/inventory.yml ansible/playbooks/configure_network.yml \
+#     -e @ansible/vars/all.yml
 
-- name: Configure BGP underlay and EVPN overlay on spine
+- name: Configure BGP underlay on spine
   hosts: spine
   gather_facts: false
   tasks:
@@ -39,21 +28,21 @@
         sudo nv set vrf default router bgp address-family ipv4-unicast redistribute connected enable on
         sudo nv config apply -y
 
-- name: Configure tenant VRF, VLAN, VXLAN and BGP on leaf-1
+- name: Configure tenant-a on leaf-1
   hosts: clab-ybettan-ansible-net-lab-leaf-1
   gather_facts: false
   tasks:
-    - name: Configure loopback, VRF, VLAN, VXLAN, and BGP via NVUE
+    - name: Configure loopback, tenant-a VRF, VLAN, VXLAN, and BGP via NVUE
       raw: |
         sudo nv set interface lo ip address {{ leaf1_loopback }}
-        sudo nv set vrf {{ tenant_name }} evpn vni {{ tenant_l3_vni }}
-        sudo nv set vrf {{ tenant_name }} evpn enable on
-        sudo nv set bridge domain br_default vlan {{ tenant_vlan }}
-        sudo nv set bridge domain br_default vlan {{ tenant_vlan }} vni {{ tenant_l2_vni }}
-        sudo nv set interface {{ server_port }} bridge domain br_default access {{ tenant_vlan }}
-        sudo nv set interface vlan{{ tenant_vlan }} ip vrr address {{ tenant_subnet | ansible.utils.ipaddr('1') }}
-        sudo nv set interface vlan{{ tenant_vlan }} ip vrr state up
-        sudo nv set interface vlan{{ tenant_vlan }} ip vrf {{ tenant_name }}
+        sudo nv set vrf {{ tenant_a_name }} evpn vni {{ tenant_a_l3_vni }}
+        sudo nv set vrf {{ tenant_a_name }} evpn enable on
+        sudo nv set bridge domain br_default vlan {{ tenant_a_vlan }}
+        sudo nv set bridge domain br_default vlan {{ tenant_a_vlan }} vni {{ tenant_a_l2_vni }}
+        sudo nv set interface {{ server_port }} bridge domain br_default access {{ tenant_a_vlan }}
+        sudo nv set interface vlan{{ tenant_a_vlan }} ip vrr address {{ tenant_a_subnet | ansible.utils.ipaddr('1') }}
+        sudo nv set interface vlan{{ tenant_a_vlan }} ip vrr state up
+        sudo nv set interface vlan{{ tenant_a_vlan }} ip vrf {{ tenant_a_name }}
         sudo nv set nve vxlan source address {{ leaf1_loopback | regex_replace('/.*', '') }}
         sudo nv set router bgp autonomous-system {{ leaf1_asn }}
         sudo nv set router bgp enable on
@@ -64,7 +53,7 @@
         sudo nv set vrf default router bgp address-family ipv4-unicast redistribute connected enable on
         sudo nv config apply -y
 
-    - name: Enable advertise-all-vni on leaf-1 (not exposed via NVUE)
+    - name: Enable advertise-all-vni on leaf-1
       raw: >
         sudo vtysh
         -c "configure terminal"
@@ -74,21 +63,21 @@
         -c "end"
         -c "write memory"
 
-- name: Configure tenant VRF, VLAN, VXLAN and BGP on leaf-2
+- name: Configure tenant-a and tenant-b on leaf-2
   hosts: clab-ybettan-ansible-net-lab-leaf-2
   gather_facts: false
   tasks:
-    - name: Configure loopback, VRF, VLAN, VXLAN, and BGP via NVUE
+    - name: Configure loopback, tenant-a VRF, VLAN, VXLAN, and BGP via NVUE
       raw: |
         sudo nv set interface lo ip address {{ leaf2_loopback }}
-        sudo nv set vrf {{ tenant_name }} evpn vni {{ tenant_l3_vni }}
-        sudo nv set vrf {{ tenant_name }} evpn enable on
-        sudo nv set bridge domain br_default vlan {{ tenant_vlan }}
-        sudo nv set bridge domain br_default vlan {{ tenant_vlan }} vni {{ tenant_l2_vni }}
-        sudo nv set interface {{ server_port }} bridge domain br_default access {{ tenant_vlan }}
-        sudo nv set interface vlan{{ tenant_vlan }} ip vrr address {{ tenant_subnet | ansible.utils.ipaddr('1') }}
-        sudo nv set interface vlan{{ tenant_vlan }} ip vrr state up
-        sudo nv set interface vlan{{ tenant_vlan }} ip vrf {{ tenant_name }}
+        sudo nv set vrf {{ tenant_a_name }} evpn vni {{ tenant_a_l3_vni }}
+        sudo nv set vrf {{ tenant_a_name }} evpn enable on
+        sudo nv set bridge domain br_default vlan {{ tenant_a_vlan }}
+        sudo nv set bridge domain br_default vlan {{ tenant_a_vlan }} vni {{ tenant_a_l2_vni }}
+        sudo nv set interface {{ server_port }} bridge domain br_default access {{ tenant_a_vlan }}
+        sudo nv set interface vlan{{ tenant_a_vlan }} ip vrr address {{ tenant_a_subnet | ansible.utils.ipaddr('1') }}
+        sudo nv set interface vlan{{ tenant_a_vlan }} ip vrr state up
+        sudo nv set interface vlan{{ tenant_a_vlan }} ip vrf {{ tenant_a_name }}
         sudo nv set nve vxlan source address {{ leaf2_loopback | regex_replace('/.*', '') }}
         sudo nv set router bgp autonomous-system {{ leaf2_asn }}
         sudo nv set router bgp enable on
@@ -99,7 +88,19 @@
         sudo nv set vrf default router bgp address-family ipv4-unicast redistribute connected enable on
         sudo nv config apply -y
 
-    - name: Enable advertise-all-vni on leaf-2 (not exposed via NVUE)
+    - name: Add tenant-b VRF, VLAN, VNI and assign swp3 via NVUE
+      raw: |
+        sudo nv set vrf {{ tenant_b_name }} evpn vni {{ tenant_b_l3_vni }}
+        sudo nv set vrf {{ tenant_b_name }} evpn enable on
+        sudo nv set bridge domain br_default vlan {{ tenant_b_vlan }}
+        sudo nv set bridge domain br_default vlan {{ tenant_b_vlan }} vni {{ tenant_b_l2_vni }}
+        sudo nv set interface {{ tenant_b_port }} bridge domain br_default access {{ tenant_b_vlan }}
+        sudo nv set interface vlan{{ tenant_b_vlan }} ip vrr address {{ tenant_b_subnet | ansible.utils.ipaddr('1') }}
+        sudo nv set interface vlan{{ tenant_b_vlan }} ip vrr state up
+        sudo nv set interface vlan{{ tenant_b_vlan }} ip vrf {{ tenant_b_name }}
+        sudo nv config apply -y
+
+    - name: Enable advertise-all-vni on leaf-2 (must run after all nv config apply)
       raw: >
         sudo vtysh
         -c "configure terminal"

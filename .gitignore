@@ -67,6 +67,9 @@ docs/pr-dashboard/data.json
 # Workflow artifacts (bugfix, implement)
 .artifacts/
 
+# Containerlab generated state
+clab-*/
+
 # AI Tooling
 .cursor/
 .gemini/

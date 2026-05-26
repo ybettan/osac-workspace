@@ -1,0 +1,22 @@
+---
+# Fabric — device-level settings
+leaf1_loopback: "10.0.0.1/32"
+leaf2_loopback: "10.0.0.2/32"
+spine_loopback: "10.0.0.3/32"
+leaf1_asn: 65001
+leaf2_asn: 65002
+spine_asn: 65000
+
+# Tenant A
+tenant_a_name: "tenant-a"
+tenant_a_vlan: 100
+tenant_a_l2_vni: 10100
+tenant_a_l3_vni: 10001
+tenant_a_subnet: "10.100.0.0/24"
+
+# Tenant B
+tenant_b_name: "tenant-b"
+tenant_b_vlan: 200
+tenant_b_l2_vni: 10200
+tenant_b_l3_vni: 10002
+tenant_b_subnet: "10.200.0.0/24"

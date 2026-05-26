@@ -70,8 +70,8 @@ Goal: A working simulated leaf-spine fabric with virtual hosts we can use to tes
          │(Cumulus) │         │(Cumulus) │
          └──┬───┬──┘         └──┬───┬──┘
             │   │               │   │
-         host-1 gw-node      host-2 (spare)
-      (worker)  (NAT/LB)   (worker)
+         host-1 gw-node      host-2 host-3
+      (tenant-a) (NAT/LB) (tenant-a) (tenant-b)
 ```
 
 **Test:** `containerlab inspect -t ansible-net-lab.clab.yml` shows all nodes running.
@@ -86,9 +86,9 @@ Goal: Prove we can configure VLANs, VRFs, and BGP on the simulated switches usin
 | 7 | **Write a playbook to configure a single tenant VRF** on both leaves: create VRF "tenant-a", VLAN 100, L2 VNI 10100, L3 VNI 10001, assign host-1's port (swp1) to VLAN 100 access mode. Use `nvidia.nvue` Ansible collection modules. |
 | 8 | **Configure BGP underlay** -- eBGP between spine and leaves (each leaf gets its own ASN). Verify `net show bgp summary` shows established peers. |
 | 9 | **Configure EVPN overlay** -- enable EVPN address family, advertise VNI 10100 in VRF tenant-a. Verify `net show evpn vni` shows the VNI. |
-| 10 | **Test tenant isolation** -- from host-1, ping host-2 (same tenant). Confirm they can communicate via the VXLAN overlay. Then create VRF "tenant-b" with VLAN 200 on host-2's port and confirm host-1 and host-2 can NO LONGER reach each other. |
+| 10 | **Test tenant connectivity and isolation** -- (a) from host-1, ping host-2 (both tenant-a) via VXLAN. (b) Add host-3 on leaf-2:swp3 with VRF "tenant-b" (VLAN 200, VNI 10200). Confirm host-1/host-2 (tenant-a) can reach each other but CANNOT reach host-3 (tenant-b). |
 
-**Test:** `ping` from host-1 fails to reach host-2 when in different VRFs.
+**Test:** `ping` works within tenant-a (host-1 ↔ host-2), fails cross-tenant (host-1/host-2 → host-3).
 
 ### Phase 3: Configure Linux Gateway Node (NAT/LB)
 

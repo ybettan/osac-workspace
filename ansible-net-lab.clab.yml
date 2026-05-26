@@ -11,30 +11,40 @@ topology:
     # Spine switch
     spine:
       kind: cvx
+      mgmt-ipv4: 172.20.20.10
       binds:
         - /lib/modules:/lib/modules:ro
 
     # Leaf switches
     leaf-1:
       kind: cvx
+      mgmt-ipv4: 172.20.20.11
       binds:
         - /lib/modules:/lib/modules:ro
 
     leaf-2:
       kind: cvx
+      mgmt-ipv4: 172.20.20.12
       binds:
         - /lib/modules:/lib/modules:ro
 
     # Linux hosts simulating bare-metal workers
     host-1:
       kind: linux
+      mgmt-ipv4: 172.20.20.20
 
     host-2:
       kind: linux
+      mgmt-ipv4: 172.20.20.21
+
+    host-3:
+      kind: linux
+      mgmt-ipv4: 172.20.20.22
 
     # Linux gateway node (SNAT/DNAT -- replaces Netris SoftGate)
     gw-node:
       kind: linux
+      mgmt-ipv4: 172.20.20.30
 
   links:
     # Spine <-> Leaf uplinks
@@ -47,3 +57,4 @@ topology:
 
     # Leaf-2 <-> hosts
     - endpoints: ["leaf-2:swp2", "host-2:eth1"]
+    - endpoints: ["leaf-2:swp3", "host-3:eth1"]

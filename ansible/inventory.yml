@@ -2,7 +2,7 @@ all:
   vars:
     ansible_user: cumulus
     ansible_password: cumulus
-    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
     # become is set per-task where needed (e.g. net commit)
     ansible_become_password: cumulus
 
@@ -12,28 +12,32 @@ all:
         spine:
           hosts:
             clab-ybettan-ansible-net-lab-spine:
-              ansible_host: 172.20.20.2
+              ansible_host: 172.20.20.10
         leaves:
           hosts:
             clab-ybettan-ansible-net-lab-leaf-1:
-              ansible_host: 172.20.20.3
+              ansible_host: 172.20.20.11
               # Data-plane ports
               server_port: swp2    # facing host-1
               gateway_port: swp3   # facing gw-node
               uplink_port: swp1    # facing spine
             clab-ybettan-ansible-net-lab-leaf-2:
-              ansible_host: 172.20.20.5
+              ansible_host: 172.20.20.12
               server_port: swp2    # facing host-2
+              tenant_b_port: swp3  # facing host-3
               uplink_port: swp1    # facing spine
 
     hosts:
       hosts:
         clab-ybettan-ansible-net-lab-host-1:
-          ansible_host: 172.20.20.7
+          ansible_host: 172.20.20.20
           ansible_user: root
         clab-ybettan-ansible-net-lab-host-2:
-          ansible_host: 172.20.20.4
+          ansible_host: 172.20.20.21
+          ansible_user: root
+        clab-ybettan-ansible-net-lab-host-3:
+          ansible_host: 172.20.20.22
           ansible_user: root
         clab-ybettan-ansible-net-lab-gw-node:
-          ansible_host: 172.20.20.6
+          ansible_host: 172.20.20.30
           ansible_user: root
