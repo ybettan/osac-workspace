@@ -137,7 +137,7 @@ Rewrote `ansible/playbooks/configure_tenant.yml` from NCLU (`net add`) to **NVUE
 Issues encountered and resolved:
 1. **`nclu` Ansible module deprecated** — `community.network.nclu` fails with Python deserialization errors on ansible-core 2.20. Switched to `raw` module running `nv set` commands directly.
 2. **`netaddr` Python library missing** — required by `ansible.utils.ipaddr` filter. Installed via `pip install netaddr`.
-3. **Sudo permissions** — `cumulus` user had restricted sudo. Granted full NOPASSWD via `docker exec`.
+3. **Sudo permissions** — `cumulus` user had restricted sudo. Granted full NOPASSWD via `docker exec`. Later discovered `nv` commands don't require sudo on Cumulus VX — removed `sudo` prefixes from all `nv set`/`nv config apply` commands. `vtysh` still requires sudo.
 4. **Per-neighbor EVPN activation** — NVUE requires explicit `neighbor <id> address-family l2vpn-evpn enable on` in addition to the VRF-level enable.
 5. **`redistribute connected` missing** — leaves weren't advertising loopback IPs via IPv4 BGP, so spine couldn't resolve EVPN next-hops. Added via NVUE.
 6. **`advertise-all-vni` not exposed via NVUE** — had to add via `vtysh` as a separate task. Without it, FRR doesn't pick up local VNIs for EVPN advertisement.
