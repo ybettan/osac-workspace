@@ -2,7 +2,7 @@
 # Configures the full EVPN/VXLAN fabric in one shot:
 #   1. BGP underlay (spine + both leaves)
 #   2. Tenant-a overlay on both leaves (VLAN 100, VNI 10100)
-#   3. Tenant-b overlay on leaf-2 only (VLAN 200, VNI 10200)
+#   3. Tenant-b overlay on both leaves (VLAN 200, VNI 10200)
 #   4. advertise-all-vni via vtysh (must run last, after all nv config apply)
 #
 # Usage:
@@ -28,7 +28,7 @@
         nv set vrf default router bgp address-family ipv4-unicast redistribute connected enable on
         nv config apply -y
 
-- name: Configure tenant-a on leaf-1
+- name: Configure tenant-a, tenant-b, and gateway ports on leaf-1
   hosts: clab-ybettan-ansible-net-lab-leaf-1
   gather_facts: false
   tasks:
@@ -40,6 +40,7 @@
         nv set bridge domain br_default vlan {{ tenant_a_vlan }}
         nv set bridge domain br_default vlan {{ tenant_a_vlan }} vni {{ tenant_a_l2_vni }}
         nv set interface {{ server_port }} bridge domain br_default access {{ tenant_a_vlan }}
+        nv set interface {{ gateway_port_a }} bridge domain br_default access {{ tenant_a_vlan }}
         nv set interface vlan{{ tenant_a_vlan }} ip vrr address {{ tenant_a_subnet | ansible.utils.ipaddr('1') }}
         nv set interface vlan{{ tenant_a_vlan }} ip vrr state up
         nv set interface vlan{{ tenant_a_vlan }} ip vrf {{ tenant_a_name }}
@@ -53,7 +54,19 @@
         nv set vrf default router bgp address-family ipv4-unicast redistribute connected enable on
         nv config apply -y
 
-    - name: Enable advertise-all-vni on leaf-1
+    - name: Add tenant-b VRF, VLAN, VNI and assign gateway port via NVUE
+      raw: |
+        nv set vrf {{ tenant_b_name }} evpn vni {{ tenant_b_l3_vni }}
+        nv set vrf {{ tenant_b_name }} evpn enable on
+        nv set bridge domain br_default vlan {{ tenant_b_vlan }}
+        nv set bridge domain br_default vlan {{ tenant_b_vlan }} vni {{ tenant_b_l2_vni }}
+        nv set interface {{ gateway_port_b }} bridge domain br_default access {{ tenant_b_vlan }}
+        nv set interface vlan{{ tenant_b_vlan }} ip vrr address {{ tenant_b_subnet | ansible.utils.ipaddr('1') }}
+        nv set interface vlan{{ tenant_b_vlan }} ip vrr state up
+        nv set interface vlan{{ tenant_b_vlan }} ip vrf {{ tenant_b_name }}
+        nv config apply -y
+
+    - name: Enable advertise-all-vni on leaf-1 (must run after all nv config apply)
       raw: >
         sudo vtysh
         -c "configure terminal"

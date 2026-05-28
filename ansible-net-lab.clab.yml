@@ -51,9 +51,10 @@ topology:
     - endpoints: ["spine:swp1", "leaf-1:swp1"]
     - endpoints: ["spine:swp2", "leaf-2:swp1"]
 
-    # Leaf-1 <-> hosts
+    # Leaf-1 <-> hosts + gateway
     - endpoints: ["leaf-1:swp2", "host-1:eth1"]
     - endpoints: ["leaf-1:swp3", "gw-node:eth1"]
+    - endpoints: ["leaf-1:swp4", "gw-node:eth2"]
 
     # Leaf-2 <-> hosts
     - endpoints: ["leaf-2:swp2", "host-2:eth1"]

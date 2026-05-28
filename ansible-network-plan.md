@@ -58,21 +58,32 @@ Goal: A working simulated leaf-spine fabric with virtual hosts we can use to tes
 
 **Topology:**
 ```
-                   ┌─────────┐
-                   │  spine  │
-                   │ (Cumulus)│
-                   └──┬───┬──┘
-                      │   │
-              ┌───────┘   └───────┐
-              │                   │
-         ┌────┴────┐         ┌───┴─────┐
-         │  leaf-1  │         │  leaf-2  │
-         │(Cumulus) │         │(Cumulus) │
-         └──┬───┬──┘         └──┬───┬──┘
-            │   │               │   │
-         host-1 gw-node      host-2 host-3
-      (tenant-a) (NAT/LB) (tenant-a) (tenant-b)
+                    ┌─────────┐
+                    │  spine  │
+                    │ (Cumulus)│
+                    └──┬───┬──┘
+                       │   │
+              ┌────────┘   └────────┐
+              │                     │
+         ┌────┴─────┐         ┌────┴─────┐
+         │  leaf-1   │         │  leaf-2   │
+         │ (Cumulus) │         │ (Cumulus) │
+         └┬───┬───┬─┘         └──┬───┬───┘
+          │   │   │               │   │
+       host-1 │  gw-node       host-2 host-3
+    (tenant-a)│  (NAT/LB)   (tenant-a) (tenant-b)
+              │   │   │
+             swp3 swp4
+          (VLAN100)(VLAN200)
+           eth1    eth2
 ```
+
+gw-node connects to leaf-1 via two ports:
+- swp3 → eth1: access port in VLAN 100 (tenant-a) — same network as host-1/host-2
+- swp4 → eth2: access port in VLAN 200 (tenant-b) — same network as host-3
+
+This does NOT change host-1's configuration. host-1 remains on swp2 (VLAN 100, tenant-a only).
+leaf-1 now has both tenant-a and tenant-b configured, but only to serve the gateway ports.
 
 **Test:** `containerlab inspect -t ansible-net-lab.clab.yml` shows all nodes running.
 
@@ -92,11 +103,11 @@ Goal: Prove we can configure VLANs, VRFs, and BGP on the simulated switches usin
 
 ### Phase 3: Configure Linux Gateway Node (NAT/LB)
 
-Goal: Prove the gateway node can provide SNAT (egress) and DNAT (ingress) -- the SoftGate replacement.
+Goal: Prove the gateway node can provide SNAT (egress) and DNAT (ingress) -- the Netris SoftGate replacement.
 
 | # | Step |
 |---|------|
-| 11 | **Connect gw-node to both management and tenant networks** -- it needs interfaces in the default VRF (management) and tenant VRFs. Configure it as dual-homed via leaf-1. |
+| 11 | **Connect gw-node to both tenant networks via leaf-1** -- add a second data plane link (leaf-1:swp4 ↔ gw-node:eth2) for tenant-b. Configure leaf-1:swp3 as VLAN 100 access port (tenant-a → gw-node:eth1) and leaf-1:swp4 as VLAN 200 access port (tenant-b → gw-node:eth2). Add tenant-b VRF/VLAN/VNI config to leaf-1 (only for the gateway port — host-1 stays tenant-a only). Assign gw-node IPs: eth1=10.100.0.254, eth2=10.200.0.254. |
 | 12 | **Write an Ansible playbook for SNAT** -- configure iptables MASQUERADE rule on the gateway: traffic from tenant-a subnet -> SNAT to the gateway's public IP. Verify host-1 can reach an external target. |
 | 13 | **Write an Ansible playbook for DNAT** -- configure iptables DNAT rule on the gateway: traffic to gateway's public IP port 6443 -> forward to internal API IP. Verify external access to the forwarded port works. |
 

@@ -18,9 +18,10 @@ all:
             clab-ybettan-ansible-net-lab-leaf-1:
               ansible_host: 172.20.20.11
               # Data-plane ports
-              server_port: swp2    # facing host-1
-              gateway_port: swp3   # facing gw-node
-              uplink_port: swp1    # facing spine
+              server_port: swp2      # facing host-1
+              gateway_port_a: swp3   # facing gw-node eth1 (tenant-a)
+              gateway_port_b: swp4   # facing gw-node eth2 (tenant-b)
+              uplink_port: swp1      # facing spine
             clab-ybettan-ansible-net-lab-leaf-2:
               ansible_host: 172.20.20.12
               server_port: swp2    # facing host-2

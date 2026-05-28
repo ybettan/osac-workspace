@@ -224,7 +224,26 @@ Consolidated all manual steps into an automated, reproducible deployment:
 
 ## Phase 3: Configure Linux Gateway Node (NAT/LB)
 
-*(ready to start)*
+### Step 11 — Connect gw-node to both tenant networks
+
+**Topology change:**
+- Added second data plane link: `leaf-1:swp4 ↔ gw-node:eth2`
+- gw-node now has two data plane interfaces:
+  - eth1 (via leaf-1:swp3, VLAN 100) → tenant-a network (10.100.0.254/24)
+  - eth2 (via leaf-1:swp4, VLAN 200) → tenant-b network (10.200.0.254/24)
+- host-1 is NOT affected — it stays on swp2 (VLAN 100, tenant-a only)
+- leaf-1 now has tenant-b config (VRF, VLAN 200, VNI 10200) but only to serve the gateway port
+
+**Playbook changes:**
+- leaf-1 play: added `gateway_port_a` (swp3) as access port in VLAN 100
+- leaf-1 play: added tenant-b VRF/VLAN/VNI block + `gateway_port_b` (swp4) as access port in VLAN 200
+- Moved `advertise-all-vni` to run after both tenant configs (avoids NVUE overwriting vtysh settings)
+
+**Setup script changes:**
+- Assigns gw-node eth1=10.100.0.254/24, eth2=10.200.0.254/24
+- Added gw-node connectivity tests (ping tenant-a and tenant-b VRR addresses)
+
+**Result:** *(pending test run)*
 
 ---
 

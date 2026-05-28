@@ -94,6 +94,14 @@ for pair in "host-1:10.100.0.10/24" "host-2:10.100.0.20/24" "host-3:10.200.0.20/
     echo "  ${host} -> ${ip}"
 done
 
+# gw-node: one interface per tenant
+docker exec "${PREFIX}-gw-node" ip addr flush dev eth1 2>/dev/null || true
+docker exec "${PREFIX}-gw-node" ip addr add 10.100.0.254/24 dev eth1
+echo "  gw-node eth1 -> 10.100.0.254/24 (tenant-a)"
+docker exec "${PREFIX}-gw-node" ip addr flush dev eth2 2>/dev/null || true
+docker exec "${PREFIX}-gw-node" ip addr add 10.200.0.254/24 dev eth2
+echo "  gw-node eth2 -> 10.200.0.254/24 (tenant-b)"
+
 # ---------- step 7: wait for EVPN convergence ----------
 
 info "Waiting for BGP/EVPN convergence (15s)..."
@@ -103,6 +111,8 @@ sleep 15
 info "Warming up VXLAN paths..."
 docker exec "${PREFIX}-host-1" ping -c 1 -W 2 10.100.0.20 &>/dev/null || true
 docker exec "${PREFIX}-host-2" ping -c 1 -W 2 10.100.0.10 &>/dev/null || true
+docker exec "${PREFIX}-gw-node" ping -c 1 -W 2 10.100.0.1 &>/dev/null || true
+docker exec "${PREFIX}-gw-node" ping -c 1 -W 2 10.200.0.1 &>/dev/null || true
 sleep 2
 
 # ---------- step 8: verification ----------
@@ -141,6 +151,21 @@ if docker exec "${PREFIX}-host-2" ping -c 2 -W 3 10.200.0.20 &>/dev/null; then
     errors=$((errors + 1))
 else
     ok "host-2 (tenant-a) -> host-3 (tenant-b) — unreachable (isolation works)"
+fi
+
+# gw-node: verify it can reach both tenant VRR gateways
+if docker exec "${PREFIX}-gw-node" ping -c 2 -W 3 10.100.0.1 &>/dev/null; then
+    ok "gw-node -> tenant-a VRR (10.100.0.1)"
+else
+    fail "gw-node -> tenant-a VRR (10.100.0.1) — expected PASS"
+    errors=$((errors + 1))
+fi
+
+if docker exec "${PREFIX}-gw-node" ping -c 2 -W 3 10.200.0.1 &>/dev/null; then
+    ok "gw-node -> tenant-b VRR (10.200.0.1)"
+else
+    fail "gw-node -> tenant-b VRR (10.200.0.1) — expected PASS"
+    errors=$((errors + 1))
 fi
 
 echo ""
