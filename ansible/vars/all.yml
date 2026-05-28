@@ -7,6 +7,10 @@ leaf1_asn: 65001
 leaf2_asn: 65002
 spine_asn: 65000
 
+# Gateway node IPs (next-hop for default routes in tenant VRFs)
+gw_a_ip: "10.100.0.254"
+gw_b_ip: "10.200.0.254"
+
 # Tenant A
 tenant_a_name: "tenant-a"
 tenant_a_vlan: 100

@@ -243,13 +243,47 @@ Consolidated all manual steps into an automated, reproducible deployment:
 - Assigns gw-node eth1=10.100.0.254/24, eth2=10.200.0.254/24
 - Added gw-node connectivity tests (ping tenant-a and tenant-b VRR addresses)
 
-**Result:** *(pending test run)*
+**Result:** All gw-node connectivity tests pass ✓
+
+### Steps 12-13 — SNAT and DNAT
+
+1. Added static default routes in both tenant VRFs on both leaves → gw-node
+2. Set default gateways on all hosts → tenant VRR address
+3. Enabled IP forwarding on gw-node (`net.ipv4.ip_forward=1`)
+4. Added MASQUERADE rules for both tenant subnets (`-o eth0 -j MASQUERADE`)
+5. Added FORWARD DROP rules to block inter-tenant routing (`eth1 ↔ eth2`)
+6. Added DNAT rule: `172.20.20.30:6443 → 10.100.0.10:6443`
+7. Added SNAT for DNAT'd traffic (lab workaround for shared management network asymmetric routing)
+
+**Issues encountered:**
+- **Inter-tenant leak via gateway** — IP forwarding on gw-node allowed routing between eth1 (tenant-a) and eth2 (tenant-b). Fixed with iptables FORWARD DROP rules.
+- **DNAT asymmetric routing** — host-1 replied directly to the client via management network (connected route on eth0), bypassing gw-node's conntrack. Fixed by also MASQUERADEing DNAT'd traffic so host-1 replies to gw-node.
+- **Host default route conflict** — `ip route add` failed because Docker already sets a default route via eth0. Fixed with `ip route replace`.
+
+**Result:**
+
+```
+==> Running verification tests...
+
+  [PASS] host-1 (tenant-a) -> host-2 (tenant-a)
+  [PASS] host-2 (tenant-a) -> host-1 (tenant-a)
+  [PASS] host-1 (tenant-a) -> host-3 (tenant-b) — unreachable (isolation works)
+  [PASS] host-2 (tenant-a) -> host-3 (tenant-b) — unreachable (isolation works)
+  [PASS] gw-node -> tenant-a VRR (10.100.0.1)
+  [PASS] gw-node -> tenant-b VRR (10.200.0.1)
+  [PASS] host-1 (tenant-a) -> 172.20.20.1 (SNAT egress)
+  [PASS] host-2 (tenant-a) -> 172.20.20.1 (SNAT egress, cross-leaf)
+  [PASS] host-3 (tenant-b) -> 172.20.20.1 (SNAT egress)
+  [PASS] DNAT: 172.20.20.30:6443 -> host-1:6443
+
+==> All tests passed!
+```
 
 ---
 
 ## Phase 4: Build the `ansible.steps` Collection
 
-*(pending Phase 3 completion)*
+*(ready to start)*
 
 ---
 

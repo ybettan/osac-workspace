@@ -44,6 +44,7 @@
         nv set interface vlan{{ tenant_a_vlan }} ip vrr address {{ tenant_a_subnet | ansible.utils.ipaddr('1') }}
         nv set interface vlan{{ tenant_a_vlan }} ip vrr state up
         nv set interface vlan{{ tenant_a_vlan }} ip vrf {{ tenant_a_name }}
+        nv set vrf {{ tenant_a_name }} router static 0.0.0.0/0 via {{ gw_a_ip }}
         nv set nve vxlan source address {{ leaf1_loopback | regex_replace('/.*', '') }}
         nv set router bgp autonomous-system {{ leaf1_asn }}
         nv set router bgp enable on
@@ -64,6 +65,7 @@
         nv set interface vlan{{ tenant_b_vlan }} ip vrr address {{ tenant_b_subnet | ansible.utils.ipaddr('1') }}
         nv set interface vlan{{ tenant_b_vlan }} ip vrr state up
         nv set interface vlan{{ tenant_b_vlan }} ip vrf {{ tenant_b_name }}
+        nv set vrf {{ tenant_b_name }} router static 0.0.0.0/0 via {{ gw_b_ip }}
         nv config apply -y
 
     - name: Enable advertise-all-vni on leaf-1 (must run after all nv config apply)
@@ -91,6 +93,7 @@
         nv set interface vlan{{ tenant_a_vlan }} ip vrr address {{ tenant_a_subnet | ansible.utils.ipaddr('1') }}
         nv set interface vlan{{ tenant_a_vlan }} ip vrr state up
         nv set interface vlan{{ tenant_a_vlan }} ip vrf {{ tenant_a_name }}
+        nv set vrf {{ tenant_a_name }} router static 0.0.0.0/0 via {{ gw_a_ip }}
         nv set nve vxlan source address {{ leaf2_loopback | regex_replace('/.*', '') }}
         nv set router bgp autonomous-system {{ leaf2_asn }}
         nv set router bgp enable on
@@ -111,6 +114,7 @@
         nv set interface vlan{{ tenant_b_vlan }} ip vrr address {{ tenant_b_subnet | ansible.utils.ipaddr('1') }}
         nv set interface vlan{{ tenant_b_vlan }} ip vrr state up
         nv set interface vlan{{ tenant_b_vlan }} ip vrf {{ tenant_b_name }}
+        nv set vrf {{ tenant_b_name }} router static 0.0.0.0/0 via {{ gw_b_ip }}
         nv config apply -y
 
     - name: Enable advertise-all-vni on leaf-2 (must run after all nv config apply)

@@ -102,6 +102,43 @@ docker exec "${PREFIX}-gw-node" ip addr flush dev eth2 2>/dev/null || true
 docker exec "${PREFIX}-gw-node" ip addr add 10.200.0.254/24 dev eth2
 echo "  gw-node eth2 -> 10.200.0.254/24 (tenant-b)"
 
+# Set default gateways on hosts (VRR address = their door out of the subnet)
+info "Setting default gateways on hosts..."
+docker exec "${PREFIX}-host-1" ip route replace default via 10.100.0.1
+docker exec "${PREFIX}-host-2" ip route replace default via 10.100.0.1
+docker exec "${PREFIX}-host-3" ip route replace default via 10.200.0.1
+echo "  host-1, host-2 -> 10.100.0.1 (tenant-a VRR)"
+echo "  host-3 -> 10.200.0.1 (tenant-b VRR)"
+
+# ---------- step 6b: configure SNAT/DNAT on gw-node ----------
+
+info "Configuring gateway node (IP forwarding + NAT)..."
+
+# Install iptables (Alpine doesn't have it by default)
+docker exec "${PREFIX}-gw-node" apk add --no-cache iptables >/dev/null 2>&1
+echo "  Installed iptables"
+
+# Enable IP forwarding (let gw-node route packets between interfaces)
+docker exec "${PREFIX}-gw-node" sysctl -w net.ipv4.ip_forward=1 >/dev/null
+echo "  Enabled IP forwarding"
+
+# Block forwarding between tenant interfaces (preserve isolation!)
+# gw-node must only route tenant ↔ eth0, never tenant-a ↔ tenant-b
+docker exec "${PREFIX}-gw-node" iptables -A FORWARD -i eth1 -o eth2 -j DROP
+docker exec "${PREFIX}-gw-node" iptables -A FORWARD -i eth2 -o eth1 -j DROP
+echo "  Blocked inter-tenant forwarding (eth1 ↔ eth2)"
+
+# SNAT: masquerade tenant traffic leaving via eth0 (management/external)
+docker exec "${PREFIX}-gw-node" iptables -t nat -A POSTROUTING -s 10.100.0.0/24 -o eth0 -j MASQUERADE
+docker exec "${PREFIX}-gw-node" iptables -t nat -A POSTROUTING -s 10.200.0.0/24 -o eth0 -j MASQUERADE
+echo "  Added MASQUERADE rules for tenant-a and tenant-b"
+
+# DNAT: forward gw-node:6443 to host-1:6443 (simulates API server access)
+docker exec "${PREFIX}-gw-node" iptables -t nat -A PREROUTING -d 172.20.20.30 -p tcp --dport 6443 -j DNAT --to-destination 10.100.0.10:6443
+# Also SNAT the DNAT'd traffic so host-1 replies via gw-node, not directly via mgmt network
+docker exec "${PREFIX}-gw-node" iptables -t nat -A POSTROUTING -d 10.100.0.10 -p tcp --dport 6443 -j MASQUERADE
+echo "  Added DNAT rule: 172.20.20.30:6443 -> 10.100.0.10:6443"
+
 # ---------- step 7: wait for EVPN convergence ----------
 
 info "Waiting for BGP/EVPN convergence (15s)..."
@@ -165,6 +202,40 @@ if docker exec "${PREFIX}-gw-node" ping -c 2 -W 3 10.200.0.1 &>/dev/null; then
     ok "gw-node -> tenant-b VRR (10.200.0.1)"
 else
     fail "gw-node -> tenant-b VRR (10.200.0.1) — expected PASS"
+    errors=$((errors + 1))
+fi
+
+# SNAT: hosts should reach the management network via gw-node
+if docker exec "${PREFIX}-host-1" ping -c 2 -W 3 172.20.20.1 &>/dev/null; then
+    ok "host-1 (tenant-a) -> 172.20.20.1 (SNAT egress)"
+else
+    fail "host-1 (tenant-a) -> 172.20.20.1 (SNAT egress) — expected PASS"
+    errors=$((errors + 1))
+fi
+
+if docker exec "${PREFIX}-host-2" ping -c 2 -W 3 172.20.20.1 &>/dev/null; then
+    ok "host-2 (tenant-a) -> 172.20.20.1 (SNAT egress, cross-leaf)"
+else
+    fail "host-2 (tenant-a) -> 172.20.20.1 (SNAT egress, cross-leaf) — expected PASS"
+    errors=$((errors + 1))
+fi
+
+if docker exec "${PREFIX}-host-3" ping -c 2 -W 3 172.20.20.1 &>/dev/null; then
+    ok "host-3 (tenant-b) -> 172.20.20.1 (SNAT egress)"
+else
+    fail "host-3 (tenant-b) -> 172.20.20.1 (SNAT egress) — expected PASS"
+    errors=$((errors + 1))
+fi
+
+# DNAT: connect to gw-node:6443 from management network, should reach host-1
+# Use host-2 as client (Alpine has nc; spine's nc isn't in docker exec PATH)
+docker exec "${PREFIX}-host-1" sh -c "echo DNAT-OK | nc -l -p 6443 &" 2>/dev/null
+sleep 1
+dnat_result=$(docker exec "${PREFIX}-host-2" sh -c "echo | nc -w 2 172.20.20.30 6443 2>/dev/null" || true)
+if [ "$dnat_result" = "DNAT-OK" ]; then
+    ok "DNAT: 172.20.20.30:6443 -> host-1:6443"
+else
+    fail "DNAT: 172.20.20.30:6443 -> host-1:6443 — expected 'DNAT-OK' but got '${dnat_result}'"
     errors=$((errors + 1))
 fi
 

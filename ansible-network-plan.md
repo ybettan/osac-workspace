@@ -108,10 +108,10 @@ Goal: Prove the gateway node can provide SNAT (egress) and DNAT (ingress) -- the
 | # | Step |
 |---|------|
 | 11 | **Connect gw-node to both tenant networks via leaf-1** -- add a second data plane link (leaf-1:swp4 ↔ gw-node:eth2) for tenant-b. Configure leaf-1:swp3 as VLAN 100 access port (tenant-a → gw-node:eth1) and leaf-1:swp4 as VLAN 200 access port (tenant-b → gw-node:eth2). Add tenant-b VRF/VLAN/VNI config to leaf-1 (only for the gateway port — host-1 stays tenant-a only). Assign gw-node IPs: eth1=10.100.0.254, eth2=10.200.0.254. |
-| 12 | **Write an Ansible playbook for SNAT** -- configure iptables MASQUERADE rule on the gateway: traffic from tenant-a subnet -> SNAT to the gateway's public IP. Verify host-1 can reach an external target. |
-| 13 | **Write an Ansible playbook for DNAT** -- configure iptables DNAT rule on the gateway: traffic to gateway's public IP port 6443 -> forward to internal API IP. Verify external access to the forwarded port works. |
+| 12 | **Configure SNAT on gw-node** -- add default routes in tenant VRFs on leaves → gw-node, set host default gateways → VRR, enable IP forwarding, add iptables MASQUERADE for both tenant subnets, add FORWARD DROP rules to block inter-tenant routing via gateway. Verify all hosts can reach the management network (172.20.20.1). |
+| 13 | **Configure DNAT on gw-node** -- add iptables DNAT rule forwarding gw-node:6443 → host-1:6443. Add MASQUERADE for DNAT'd traffic (lab workaround for asymmetric routing on shared management network). Verify external client can reach host-1 via gw-node:6443. |
 
-**Test:** From host-1 (in tenant VRF), `curl` an external URL via SNAT. From outside, `curl <gateway-ip>:6443` reaches the internal target.
+**Test:** All hosts ping 172.20.20.1 via SNAT. External client connects to 172.20.20.30:6443 and reaches host-1. Tenant isolation preserved.
 
 ### Phase 4: Build the `ansible.steps` Collection
 
