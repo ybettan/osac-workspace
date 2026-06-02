@@ -1,0 +1,24 @@
+---
+# Adds SNAT (MASQUERADE) for a tenant's outbound traffic.
+#
+# Required variables:
+#   snat_router_name: namespace name (e.g., "tenant-alpha")
+#   snat_source_subnet: tenant subnet (e.g., "10.100.0.0/24")
+#   snat_veth_interface: namespace-side veth name (e.g., "veth-tenant-alpha-in")
+#   snat_external_subnet: veth link subnet (e.g., "10.254.0.0/30")
+#   snat_external_interface: host external interface (e.g., "eth0")
+
+- name: SNAT inside namespace (tenant traffic -> veth)
+  ansible.builtin.raw: >
+    ip netns exec {{ snat_router_name }}
+    iptables -t nat -C POSTROUTING -s {{ snat_source_subnet }} -o {{ snat_veth_interface }} -j MASQUERADE 2>/dev/null
+    || ip netns exec {{ snat_router_name }}
+    iptables -t nat -A POSTROUTING -s {{ snat_source_subnet }} -o {{ snat_veth_interface }} -j MASQUERADE
+
+- name: SNAT on host (veth traffic -> external interface)
+  ansible.builtin.raw: >
+    iptables -t nat -C POSTROUTING -s {{ snat_external_subnet }} -o {{ snat_external_interface }} -j MASQUERADE 2>/dev/null
+    || iptables -t nat -A POSTROUTING -s {{ snat_external_subnet }} -o {{ snat_external_interface }} -j MASQUERADE
+
+- name: Enable IP forwarding on host
+  ansible.builtin.raw: sysctl -w net.ipv4.ip_forward=1

@@ -1,0 +1,18 @@
+---
+# Adds a DNAT port-forwarding rule in a tenant's namespace.
+#
+# Required variables:
+#   dnat_router_name: namespace name (e.g., "tenant-alpha")
+#   dnat_public_ip: IP to receive traffic (e.g., "10.254.0.2")
+#   dnat_public_port: external port (e.g., 6443)
+#   dnat_internal_ip: target service IP (e.g., "10.100.0.10")
+#   dnat_internal_port: target service port (e.g., 6443)
+
+- name: Add DNAT rule in namespace {{ dnat_router_name }}
+  ansible.builtin.raw: >
+    ip netns exec {{ dnat_router_name }}
+    iptables -t nat -C PREROUTING -d {{ dnat_public_ip }} -p tcp --dport {{ dnat_public_port }}
+    -j DNAT --to-destination {{ dnat_internal_ip }}:{{ dnat_internal_port }} 2>/dev/null
+    || ip netns exec {{ dnat_router_name }}
+    iptables -t nat -A PREROUTING -d {{ dnat_public_ip }} -p tcp --dport {{ dnat_public_port }}
+    -j DNAT --to-destination {{ dnat_internal_ip }}:{{ dnat_internal_port }}

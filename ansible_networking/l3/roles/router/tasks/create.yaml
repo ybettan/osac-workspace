@@ -1,0 +1,49 @@
+---
+# Creates a per-tenant router (Linux namespace) on the network node.
+#
+# Required variables:
+#   router_name: namespace name (e.g., "tenant-alpha")
+#   router_vlan_id: VLAN ID for the internal leg (e.g., 100)
+#   router_internal_subnet: tenant subnet CIDR (e.g., "10.100.0.0/24")
+#   router_internal_gateway: gateway IP for the tenant (e.g., "10.100.0.1")
+#   router_trunk_interface: physical trunk NIC (e.g., "eth1")
+#   router_external_ip: IP for the namespace-side veth (e.g., "10.254.0.2/30")
+#   router_external_peer_ip: IP for the host-side veth (e.g., "10.254.0.1/30")
+#   router_external_gateway: default route inside namespace (e.g., "10.254.0.1")
+
+- name: Create namespace {{ router_name }}
+  ansible.builtin.raw: ip netns add {{ router_name }}
+  ignore_errors: true
+
+- name: Create VLAN sub-interface on trunk
+  ansible.builtin.raw: |
+    ip link add link {{ router_trunk_interface }} name {{ router_trunk_interface }}.{{ router_vlan_id }} type vlan id {{ router_vlan_id }}
+    ip link set {{ router_trunk_interface }}.{{ router_vlan_id }} up
+
+- name: Move VLAN sub-interface into namespace
+  ansible.builtin.raw: ip link set {{ router_trunk_interface }}.{{ router_vlan_id }} netns {{ router_name }}
+
+- name: Configure internal interface inside namespace
+  ansible.builtin.raw: |
+    ip netns exec {{ router_name }} ip link set lo up
+    ip netns exec {{ router_name }} ip link set {{ router_trunk_interface }}.{{ router_vlan_id }} up
+    ip netns exec {{ router_name }} ip addr add {{ router_internal_gateway }}/{{ router_internal_subnet | ansible.utils.ipaddr('prefix') }} dev {{ router_trunk_interface }}.{{ router_vlan_id }}
+
+- name: Create veth pair for external connectivity
+  ansible.builtin.raw: |
+    ip link add veth-{{ router_name }}-in type veth peer name veth-{{ router_name }}-out
+    ip link set veth-{{ router_name }}-in netns {{ router_name }}
+
+- name: Configure host-side veth endpoint
+  ansible.builtin.raw: |
+    ip addr add {{ router_external_peer_ip }} dev veth-{{ router_name }}-out
+    ip link set veth-{{ router_name }}-out up
+
+- name: Configure namespace-side veth endpoint and default route
+  ansible.builtin.raw: |
+    ip netns exec {{ router_name }} ip addr add {{ router_external_ip }} dev veth-{{ router_name }}-in
+    ip netns exec {{ router_name }} ip link set veth-{{ router_name }}-in up
+    ip netns exec {{ router_name }} ip route add default via {{ router_external_gateway }}
+
+- name: Enable IP forwarding inside namespace
+  ansible.builtin.raw: ip netns exec {{ router_name }} sysctl -w net.ipv4.ip_forward=1
