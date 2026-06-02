@@ -1,0 +1,7 @@
+---
+- name: Reset port {{ port_name }}
+  ansible.builtin.include_role:
+    name: network-runner
+    tasks_from: delete_port
+  vars:
+    port_name: "{{ port_name }}"
