@@ -6,7 +6,7 @@ OSAC needs a new network backend (`ansible.steps`) that configures Cumulus Linux
 
 **Test environment:** Containerlab simulation on the existing MOC cluster (`hypershift1.nerc.mghpcc.org`) using Cumulus VX v5.12.1 (last standalone version — NVIDIA discontinued VX after 5.13).
 
-**NAT/LB:** Linux gateway node with iptables/nftables (replaces Netris SoftGate).
+**NAT/LB:** Linux network node with per-tenant namespaces and iptables (replaces Netris SoftGate).
 
 ## Architecture Overview
 
@@ -56,34 +56,22 @@ Goal: A working simulated leaf-spine fabric with virtual hosts we can use to tes
 | 4 | **Deploy the lab** -- `containerlab deploy -t ansible-net-lab.clab.yml`. Verify all nodes come up and are reachable via SSH. |
 | 5 | **Verify basic connectivity** -- ping between hosts through the leaves, SSH to each switch, confirm NVUE/NCLU CLI works. |
 
-**Topology:**
+**Topology (simplified — pure VLAN L2, no spine/EVPN):**
 ```
-                    ┌─────────┐
-                    │  spine  │
-                    │ (Cumulus)│
-                    └──┬───┬──┘
-                       │   │
-              ┌────────┘   └────────┐
-              │                     │
-         ┌────┴─────┐         ┌────┴─────┐
-         │  leaf-1   │         │  leaf-2   │
-         │ (Cumulus) │         │ (Cumulus) │
-         └┬───┬───┬─┘         └──┬───┬───┘
-          │   │   │               │   │
-       host-1 │  gw-node       host-2 host-3
-    (tenant-a)│  (NAT/LB)   (tenant-a) (tenant-b)
-              │   │   │
-             swp3 swp4
-          (VLAN100)(VLAN200)
-           eth1    eth2
+         ┌────────────┐         ┌────────────┐
+         │   leaf-1   │─ swp1 ──│   leaf-2   │
+         │  (Cumulus)  │  trunk  │  (Cumulus)  │
+         └┬─────────┬─┘         └─┬────────┬─┘
+          │         │              │        │
+       host-1   net-node       host-2   host-3
+     (tenant-a)  (NAT/LB)   (tenant-a) (tenant-b)
+       swp2       swp3         swp2      swp3
+       eth1       eth1         eth1      eth1
 ```
 
-gw-node connects to leaf-1 via two ports:
-- swp3 → eth1: access port in VLAN 100 (tenant-a) — same network as host-1/host-2
-- swp4 → eth2: access port in VLAN 200 (tenant-b) — same network as host-3
-
-This does NOT change host-1's configuration. host-1 remains on swp2 (VLAN 100, tenant-a only).
-leaf-1 now has both tenant-a and tenant-b configured, but only to serve the gateway ports.
+net-node connects to leaf-1 via a single trunk port (swp3 → eth1).
+Per-tenant routing is done inside Linux namespaces on the net-node,
+each with a VLAN sub-interface on the trunk.
 
 **Test:** `containerlab inspect -t ansible-net-lab.clab.yml` shows all nodes running.
 
@@ -113,18 +101,17 @@ Goal: Prove the gateway node can provide SNAT (egress) and DNAT (ingress) -- the
 
 **Test:** All hosts ping 172.20.20.1 via SNAT. External client connects to 172.20.20.30:6443 and reaches host-1. Tenant isolation preserved.
 
-### Phase 4: Build the `ansible.steps` Collection
+### Phase 4: Build Reusable Ansible Collections + Refactor Lab
 
-Goal: Package the manual playbooks into the OSAC backend contract (`cluster_infra` + `external_access`).
+Goal: Extract the manual playbook logic into reusable `ansible_networking` collections, simplify the topology from VXLAN/EVPN to pure VLAN L2, and validate everything end-to-end.
 
 | # | Step |
 |---|------|
-| 14 | **Create the collection skeleton**: `ansible/steps/` with `roles/cluster_infra/` and `roles/external_access/`, `defaults/main.yaml`, `meta/` |
-| 15 | **Implement `cluster_infra/tasks/create.yaml`**: (a) allocate workers via BareMetalPool/HostLease, (b) for each worker, SSH to leaf switch and configure: access VLAN on server port, add VLAN to tenant VRF, configure L2/L3 VNI, add BGP neighbor, (c) create NMStateConfig for worker NICs, (d) wait for agents, label, approve. Model after the Netris backend at `base/osac-aap/.../netris/steps/roles/cluster_infra/tasks/create.yaml`. |
-| 16 | **Implement `cluster_infra/tasks/delete.yaml`**: reverse of create -- remove VLAN from port, delete VRF if last tenant, detach agents, release workers to pool. |
-| 17 | **Implement `external_access/tasks/create.yaml`**: (a) wait for kube-apiserver LoadBalancer IP, (b) SSH to gateway node and configure SNAT + DNAT rules via iptables, (c) create DNS records (Route53), (d) configure MetalLB ingress VIP. Model after `base/osac-aap/.../netris/steps/roles/external_access/tasks/create.yaml`. |
-| 18 | **Implement `external_access/tasks/delete.yaml`**: remove iptables rules, delete DNS records. |
-| 19 | **Define configuration variables** in `defaults/main.yaml` and document in `docs/network-backend.md`: switch inventory, gateway IP, tenant VLAN/VRF pool, IPAM CIDR, SSH credentials. |
+| 14 | **Create `ansible_networking.l2` collection** — roles: `vlan` (create/delete via network-runner), `port` (set_access_port/reset_port via network-runner). Wraps the `network-runner` pip package for vendor-agnostic switch config. |
+| 15 | **Create `ansible_networking.l3` collection** — roles: `router` (create/delete Linux namespace with VLAN sub-interface + veth pair), `snat` (create/delete MASQUERADE rules), `dnat` (create/delete port-forwarding rules), `ipam` (allocate/release IPs from a pool). |
+| 16 | **Simplify topology** — remove spine switch and VXLAN/EVPN overlay. Use direct leaf-1 ↔ leaf-2 trunk with tagged VLANs. Rename gw-node → net-node (per-tenant routing via Linux namespaces instead of flat interfaces). |
+| 17 | **Refactor `setup-lab.sh`** — replace inline docker exec commands with `ansible_networking.l2`/`l3` collection calls. Add `run_play()` helper, network-runner role path resolution, openssh on net-node. |
+| 18 | **Validate end-to-end** — all 8 tests pass: L2 connectivity, cross-tenant isolation, namespace routing, SNAT egress, DNAT ingress. |
 
 ### Phase 5: Register and Test End-to-End Through OSAC
 

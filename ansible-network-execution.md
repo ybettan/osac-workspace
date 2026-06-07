@@ -281,9 +281,83 @@ Consolidated all manual steps into an automated, reproducible deployment:
 
 ---
 
-## Phase 4: Build the `ansible.steps` Collection
+## Phase 4: Build Reusable Ansible Collections + Refactor Lab
 
-*(ready to start)*
+### Step 14 — Create `ansible_networking.l2` collection
+
+Created `ansible_collections/ansible_networking/l2/` with two roles:
+- `vlan` — create/delete VLANs via `network-runner` role
+- `port` — set_access_port/reset_port via `network-runner` role
+
+These are thin wrappers around the `network-runner` pip package, which provides vendor-agnostic switch configuration (Cumulus NVUE, SONiC, etc.).
+
+**Result:** Committed in `a26fb4b`, later moved to `ansible_collections/` in `40b8dd9` ✓
+
+### Step 15 — Create `ansible_networking.l3` collection
+
+Created `ansible_collections/ansible_networking/l3/` with four roles:
+- `router` — create/delete per-tenant Linux namespace with VLAN sub-interface on trunk + veth pair for external connectivity
+- `snat` — create/delete MASQUERADE rules (inside namespace + on host)
+- `dnat` — create/delete port-forwarding rules inside namespace
+- `ipam` — allocate/release IPs from a JSON-backed pool
+
+All L3 roles use `ansible.builtin.raw` over SSH — same as production.
+
+**Result:** Committed in `fb76658`, later moved to `ansible_collections/` in `40b8dd9` ✓
+
+### Step 16 — Simplify topology
+
+Replaced the VXLAN/EVPN spine-leaf fabric with a pure VLAN L2 setup:
+- Removed spine switch entirely (no BGP/EVPN needed)
+- Direct leaf-1 ↔ leaf-2 trunk link carrying tagged VLANs
+- Renamed gw-node → net-node (per-tenant routing via Linux namespaces instead of flat interfaces with iptables FORWARD rules)
+- Single trunk port from leaf-1:swp3 → net-node:eth1 (was two access ports for two tenants)
+- Flattened inventory (no spine/leaves subgroups)
+- Replaced BGP/EVPN/VRF vars with simple resource pool + net-node config
+
+**Result:** Committed in `e27b0d8` ✓
+
+### Step 17 — Refactor setup-lab.sh
+
+Replaced all inline `docker exec` / raw NVUE commands with collection calls:
+- Added `run_play()` helper for inline ansible-playbook invocations via heredoc
+- Resolved network-runner role path via `network_runner.__file__` (handles pip user-installs)
+- Installed openssh on net-node so `ansible.builtin.raw` works over SSH (matching production)
+- L2 provisioning via `ansible_networking.l2.vlan` and `ansible_networking.l2.port`
+- L3 provisioning via `ansible_networking.l3.router`, `.snat`, `.dnat`
+
+**Issues encountered and resolved:**
+1. **network-runner role not found** — `sysconfig.get_path('data')` returns `/usr/local` but pip user-install places roles under `~/.local/...`. Fixed by resolving path via `network_runner.__file__`.
+2. **`port_description` required** — `network-runner`'s `conf_trunk_port` and `conf_access_port` require a `port_description` variable. Added to the playbook and collection role.
+3. **`loop_var` collision** — `network-runner`'s `run.yaml` uses `with_first_found` which overwrites the outer `item` variable, corrupting `port_name`. Fixed with `loop_control: loop_var: trunk_port`.
+4. **Recursive template vars** — `vlan_id: "{{ vlan_id }}"` in l2 roles caused "Recursive loop detected" errors. Removed redundant vars blocks — Ansible naturally passes vars to included roles.
+5. **`ansible_collections/` prefix required** — Ansible requires collections under an `ansible_collections/` directory. Moved from `ansible_networking/` to `ansible_collections/ansible_networking/`.
+6. **Linux 15-char interface name limit** — `veth-tenant-a-out` (17 chars) exceeded the limit. Shortened to `v-tenant-a-o` (12 chars).
+7. **net-node SSH** — Alpine container has no SSH daemon. Installed `openssh`, generated host keys, started `sshd`.
+8. **VLAN convergence timing** — cross-switch L2 pings failed intermittently at 5s wait. Increased to 10s.
+
+**Result:** Committed in `cdd22b9` ✓
+
+### Step 18 — End-to-end validation
+
+```
+==> Running verification tests...
+
+  [PASS] host-1 (tenant-a) -> host-2 (tenant-a)
+  [PASS] host-2 (tenant-a) -> host-1 (tenant-a)
+  [PASS] host-1 (tenant-a) -> host-3 (tenant-b) — unreachable (isolation works)
+  [PASS] host-2 (tenant-a) -> host-3 (tenant-b) — unreachable (isolation works)
+  [PASS] net-node (tenant-a ns) -> host-1
+  [PASS] net-node (tenant-b ns) -> host-3
+  [PASS] host-1 (tenant-a) -> 172.20.20.1 (SNAT egress)
+  [PASS] host-3 (tenant-b) -> 172.20.20.1 (SNAT egress)
+
+==> All tests passed!
+```
+
+All 8 tests pass on clean deploy (`./setup-lab.sh destroy && ./setup-lab.sh`).
+
+**Result:** Phase 4 complete ✓
 
 ---
 
