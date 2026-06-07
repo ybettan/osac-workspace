@@ -140,26 +140,24 @@ Goal: Verify two tenants on the same physical fabric are isolated.
 
 ## Critical Files
 
-| File | Role |
-|------|------|
-| `base/osac-aap/.../netris/steps/roles/cluster_infra/tasks/create.yaml` | Reference: Netris backend cluster_infra (model after this) |
-| `base/osac-aap/.../netris/steps/roles/external_access/tasks/create.yaml` | Reference: Netris backend external_access |
-| `base/osac-aap/.../osac/service/roles/cluster_infra/tasks/create.yaml` | Delegation point -- routes to `{{ network_steps_collection }}.cluster_infra` |
-| `base/osac-aap/group_vars/all/configuration.yaml` | Where `network_steps_collection` and `network_class` are defined |
-| `base/osac-aap/.../osac/service/roles/nmstate_config/templates/default_static.yaml.j2` | NMStateConfig template -- reuse for worker NIC config |
-| `docs/network-backend.md` | Backend documentation -- add Ansible section |
-| `scripts/aap-configuration.sh` | AAP config -- add Ansible backend env vars |
+| File (in osac-aap repo) | Role |
+|--------------------------|------|
+| `collections/ansible_collections/netris/steps/roles/cluster_infra/tasks/create.yaml` | Reference: Netris backend cluster_infra (model after this) |
+| `collections/ansible_collections/netris/steps/roles/external_access/tasks/create.yaml` | Reference: Netris backend external_access |
+| `collections/ansible_collections/osac/service/roles/cluster_infra/tasks/create.yaml` | Delegation point -- routes to `{{ network_steps_collection }}.cluster_infra` |
+| `group_vars/all/configuration.yaml` | Where `network_steps_collection` and `network_class` are defined |
+| `collections/ansible_collections/ansible/l2/` | L2 collection: vlan, port roles (DONE) |
+| `collections/ansible_collections/ansible/l3/` | L3 collection: router, snat, dnat, ipam roles (DONE) |
 
-## New Files to Create
+## Files to Create (Phase 5)
 
-| File | Purpose |
-|------|---------|
-| `ansible-net-lab.clab.yml` | Containerlab topology file for test environment |
-| `base/osac-aap/.../ansible/steps/roles/cluster_infra/tasks/create.yaml` | Ansible backend: allocate workers + configure switches |
-| `base/osac-aap/.../ansible/steps/roles/cluster_infra/tasks/delete.yaml` | Ansible backend: cleanup |
-| `base/osac-aap/.../ansible/steps/roles/external_access/tasks/create.yaml` | Ansible backend: gateway NAT + DNS |
-| `base/osac-aap/.../ansible/steps/roles/external_access/tasks/delete.yaml` | Ansible backend: cleanup |
-| `base/osac-aap/.../ansible/steps/roles/cluster_infra/defaults/main.yaml` | Default variables (switch inventory, VLAN pool, etc.) |
+| File (in osac-aap repo) | Purpose |
+|--------------------------|---------|
+| `collections/ansible_collections/ansible/steps/roles/cluster_infra/tasks/create.yaml` | Ansible backend: allocate workers + configure switches |
+| `collections/ansible_collections/ansible/steps/roles/cluster_infra/tasks/delete.yaml` | Ansible backend: cleanup |
+| `collections/ansible_collections/ansible/steps/roles/external_access/tasks/create.yaml` | Ansible backend: gateway NAT + DNS |
+| `collections/ansible_collections/ansible/steps/roles/external_access/tasks/delete.yaml` | Ansible backend: cleanup |
+| `collections/ansible_collections/ansible/steps/roles/cluster_infra/defaults/main.yaml` | Default variables (switch inventory, VLAN pool, etc.) |
 
 ## Configuration Variables (New)
 

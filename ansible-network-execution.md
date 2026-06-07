@@ -359,11 +359,27 @@ All 8 tests pass on clean deploy (`./setup-lab.sh destroy && ./setup-lab.sh`).
 
 **Result:** Phase 4 complete ✓
 
+### Step 19 — Move collections to osac-aap
+
+Moved collections from `osac-workspace/ansible_collections/` to their production home in `osac-aap/collections/ansible_collections/ansible/`. This follows the same pattern as Netris (`netris.controller`, `netris.steps`):
+
+- `ansible_networking.l2` → `ansible.l2` (vlan, port roles)
+- `ansible_networking.l3` → `ansible.l3` (router, snat, dnat, ipam roles)
+- `osac-installer/base/osac-aap` is a git submodule, so collections belong in the `osac-aap` repo directly
+
+Updated `setup-lab.sh`:
+- `ANSIBLE_COLLECTIONS_PATH` now points to `osac-aap/collections/` via configurable `OSAC_AAP_DIR`
+- All role references renamed from `ansible_networking.l2.*` / `ansible_networking.l3.*` to `ansible.l2.*` / `ansible.l3.*`
+
+All 8 tests pass with the new paths.
+
+**Result:** Committed in osac-aap (`9bd3718`) and osac-workspace (`11a49f3`) ✓
+
 ---
 
 ## Phase 5: Register and Test End-to-End Through OSAC
 
-*(pending Phase 4 completion)*
+*(ready to start)*
 
 ---
 
