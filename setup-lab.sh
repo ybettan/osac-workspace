@@ -6,9 +6,8 @@
 # Prerequisites:
 #   pip install git+https://github.com/ybettan/network-runner.git
 #
-# TODO: publish ansible_networking collections to a git repo (e.g.,
-# github.com/ybettan/ansible-networking) and install them via
-# ansible-galaxy instead of referencing the local workspace path.
+# The ansible.l2 and ansible.l3 collections live in osac-aap.
+# Override OSAC_AAP_DIR to point to a different clone.
 #
 set -euo pipefail
 
@@ -21,10 +20,11 @@ CONTAINERLAB="/home/ybettan/go/bin/containerlab"
 SWITCHES=("${PREFIX}-leaf-1" "${PREFIX}-leaf-2")
 NET_NODE="${PREFIX}-net-node"
 
-# Ansible paths for network-runner role and ansible_networking collections
+# Ansible paths
+OSAC_AAP_DIR="${OSAC_AAP_DIR:-${SCRIPT_DIR}/../osac-aap}"
 NR_ROLES_PATH="$(python3 -c "import network_runner; import os; print(os.path.join(os.path.dirname(network_runner.__file__), '..', 'etc', 'ansible', 'roles'))")"
 export ANSIBLE_ROLES_PATH="${NR_ROLES_PATH}"
-export ANSIBLE_COLLECTIONS_PATH="${SCRIPT_DIR}"
+export ANSIBLE_COLLECTIONS_PATH="${OSAC_AAP_DIR}/collections"
 
 INVENTORY="${SCRIPT_DIR}/ansible/inventory.yml"
 VARS="${SCRIPT_DIR}/ansible/vars/all.yml"
@@ -129,14 +129,14 @@ run_play '
   tasks:
     - name: Create VLAN 100
       ansible.builtin.include_role:
-        name: ansible_networking.l2.vlan
+        name: ansible.l2.vlan
         tasks_from: create
       vars:
         vlan_id: 100
 
     - name: Assign host-1 port (leaf-1:swp2)
       ansible.builtin.include_role:
-        name: ansible_networking.l2.port
+        name: ansible.l2.port
         tasks_from: set_access_port
       vars:
         port_name: swp2
@@ -145,7 +145,7 @@ run_play '
 
     - name: Assign host-2 port (leaf-2:swp2)
       ansible.builtin.include_role:
-        name: ansible_networking.l2.port
+        name: ansible.l2.port
         tasks_from: set_access_port
       vars:
         port_name: swp2
@@ -164,14 +164,14 @@ run_play '
   tasks:
     - name: Create VLAN 200
       ansible.builtin.include_role:
-        name: ansible_networking.l2.vlan
+        name: ansible.l2.vlan
         tasks_from: create
       vars:
         vlan_id: 200
 
     - name: Assign host-3 port (leaf-2:swp3)
       ansible.builtin.include_role:
-        name: ansible_networking.l2.port
+        name: ansible.l2.port
         tasks_from: set_access_port
       vars:
         port_name: swp3
@@ -202,7 +202,7 @@ run_play '
   tasks:
     - name: Create tenant-a router
       ansible.builtin.include_role:
-        name: ansible_networking.l3.router
+        name: ansible.l3.router
         tasks_from: create
       vars:
         router_name: tenant-a
@@ -216,7 +216,7 @@ run_play '
 
     - name: Create tenant-b router
       ansible.builtin.include_role:
-        name: ansible_networking.l3.router
+        name: ansible.l3.router
         tasks_from: create
       vars:
         router_name: tenant-b
@@ -240,7 +240,7 @@ run_play '
   tasks:
     - name: SNAT for tenant-a
       ansible.builtin.include_role:
-        name: ansible_networking.l3.snat
+        name: ansible.l3.snat
         tasks_from: create
       vars:
         snat_router_name: tenant-a
@@ -251,7 +251,7 @@ run_play '
 
     - name: SNAT for tenant-b
       ansible.builtin.include_role:
-        name: ansible_networking.l3.snat
+        name: ansible.l3.snat
         tasks_from: create
       vars:
         snat_router_name: tenant-b
@@ -272,7 +272,7 @@ run_play '
   tasks:
     - name: DNAT for API server (tenant-a)
       ansible.builtin.include_role:
-        name: ansible_networking.l3.dnat
+        name: ansible.l3.dnat
         tasks_from: create
       vars:
         dnat_router_name: tenant-a

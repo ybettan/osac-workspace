@@ -1,7 +1,0 @@
----
-- name: Set {{ port_name }} as access port on VLAN {{ vlan_id }}
-  ansible.builtin.include_role:
-    name: network-runner
-    tasks_from: conf_access_port
-  vars:
-    port_description: "{{ port_name }}-vlan{{ vlan_id }}"
