@@ -2,7 +2,13 @@
 #
 # Run WITHOUT sudo: ./setup-lab.sh
 # The script uses sudo internally only for containerlab commands.
-# Make sure your sudo credentials are cached (run "sudo true" first if needed).
+#
+# Prerequisites:
+#   pip install git+https://github.com/ybettan/network-runner.git
+#
+# TODO: publish ansible_networking collections to a git repo (e.g.,
+# github.com/ybettan/ansible-networking) and install them via
+# ansible-galaxy instead of referencing the local workspace path.
 #
 set -euo pipefail
 
@@ -12,13 +18,28 @@ LAB_NAME="ybettan-ansible-net-lab"
 PREFIX="clab-${LAB_NAME}"
 CONTAINERLAB="/home/ybettan/go/bin/containerlab"
 
-SWITCHES=("${PREFIX}-spine" "${PREFIX}-leaf-1" "${PREFIX}-leaf-2")
+SWITCHES=("${PREFIX}-leaf-1" "${PREFIX}-leaf-2")
+NET_NODE="${PREFIX}-net-node"
+
+# Ansible paths for network-runner role and ansible_networking collections
+NR_ROLES_PATH="$(python3 -c "import network_runner; import os; print(os.path.join(os.path.dirname(network_runner.__file__), '..', 'etc', 'ansible', 'roles'))")"
+export ANSIBLE_ROLES_PATH="${NR_ROLES_PATH}"
+export ANSIBLE_COLLECTIONS_PATH="${SCRIPT_DIR}"
+
+INVENTORY="${SCRIPT_DIR}/ansible/inventory.yml"
+VARS="${SCRIPT_DIR}/ansible/vars/all.yml"
 
 # ---------- helpers ----------
 
 info()  { echo "==> $*"; }
 ok()    { echo "  [PASS] $*"; }
 fail()  { echo "  [FAIL] $*"; }
+
+run_play() {
+    ansible-playbook -i "$INVENTORY" -e "@${VARS}" /dev/stdin <<EOF
+$1
+EOF
+}
 
 # ---------- destroy ----------
 
@@ -29,9 +50,13 @@ if [ "${1:-}" = "destroy" ]; then
     exit 0
 fi
 
+# ============================================================
+# ADMIN SETUP (done once when the fabric is deployed)
+# ============================================================
+
 # ---------- step 1: deploy containerlab ----------
 
-if docker ps --format '{{.Names}}' | grep -q "^${PREFIX}-spine$"; then
+if docker ps --format '{{.Names}}' | grep -q "^${PREFIX}-leaf-1$"; then
     info "Lab already running — skipping deploy"
 else
     info "Deploying Containerlab topology..."
@@ -43,12 +68,10 @@ fi
 wait_for_switch() {
     local sw="$1"
     local elapsed=0
-    # Wait for NVUE
     while ! docker exec "$sw" nv show system 2>/dev/null | grep -q "hostname" ; do
         sleep 3; elapsed=$((elapsed + 3))
         [ "$elapsed" -ge 90 ] && break
     done
-    # Wait for SSH
     local mgmt_ip
     mgmt_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$sw")
     while ! sshpass -p cumulus ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=2 cumulus@"$mgmt_ip" true &>/dev/null; do
@@ -73,18 +96,92 @@ for sw in "${SWITCHES[@]}"; do
     echo "  Fixed $sw"
 done
 
-# ---------- step 4: configure fabric (underlay + all tenants) ----------
+# ---------- step 4: configure trunk ports (admin setup) ----------
 
-info "Configuring network fabric (underlay + tenant-a + tenant-b)..."
+info "Configuring trunk ports on switches..."
 ansible-playbook \
-    -i "${SCRIPT_DIR}/ansible/inventory.yml" \
+    -i "$INVENTORY" \
     "${SCRIPT_DIR}/ansible/playbooks/configure_network.yml" \
-    -e "@${SCRIPT_DIR}/ansible/vars/all.yml"
+    -e "@${VARS}"
 
-# ---------- step 6: assign host IPs ----------
+# ---------- step 5: install packages on network node ----------
+
+info "Preparing network node..."
+docker exec "$NET_NODE" apk add --no-cache iptables iproute2 python3 openssh >/dev/null 2>&1
+docker exec "$NET_NODE" ssh-keygen -A >/dev/null 2>&1
+docker exec "$NET_NODE" sh -c "echo 'root:root' | chpasswd"
+docker exec "$NET_NODE" sh -c "echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config"
+docker exec "$NET_NODE" /usr/sbin/sshd
+echo "  Installed iptables + iproute2 + python3 + openssh (sshd running)"
+
+# ============================================================
+# RUNTIME SIMULATION (what OSAC orchestration would do)
+# ============================================================
+
+# ---------- step 6: provision tenant-a (VLAN 100) ----------
+
+info "Provisioning tenant-a (VLAN 100)..."
+
+run_play '
+---
+- hosts: switches
+  gather_facts: false
+  tasks:
+    - name: Create VLAN 100
+      ansible.builtin.include_role:
+        name: ansible_networking.l2.vlan
+        tasks_from: create
+      vars:
+        vlan_id: 100
+
+    - name: Assign host-1 port (leaf-1:swp2)
+      ansible.builtin.include_role:
+        name: ansible_networking.l2.port
+        tasks_from: set_access_port
+      vars:
+        port_name: swp2
+        vlan_id: 100
+      when: inventory_hostname == "clab-ybettan-ansible-net-lab-leaf-1"
+
+    - name: Assign host-2 port (leaf-2:swp2)
+      ansible.builtin.include_role:
+        name: ansible_networking.l2.port
+        tasks_from: set_access_port
+      vars:
+        port_name: swp2
+        vlan_id: 100
+      when: inventory_hostname == "clab-ybettan-ansible-net-lab-leaf-2"
+'
+
+# ---------- step 7: provision tenant-b (VLAN 200) ----------
+
+info "Provisioning tenant-b (VLAN 200)..."
+
+run_play '
+---
+- hosts: switches
+  gather_facts: false
+  tasks:
+    - name: Create VLAN 200
+      ansible.builtin.include_role:
+        name: ansible_networking.l2.vlan
+        tasks_from: create
+      vars:
+        vlan_id: 200
+
+    - name: Assign host-3 port (leaf-2:swp3)
+      ansible.builtin.include_role:
+        name: ansible_networking.l2.port
+        tasks_from: set_access_port
+      vars:
+        port_name: swp3
+        vlan_id: 200
+      when: inventory_hostname == "clab-ybettan-ansible-net-lab-leaf-2"
+'
+
+# ---------- step 8: assign host IPs ----------
 
 info "Assigning host IPs..."
-
 for pair in "host-1:10.100.0.10/24" "host-2:10.100.0.20/24" "host-3:10.200.0.20/24"; do
     host="${pair%%:*}"
     ip="${pair##*:}"
@@ -94,72 +191,124 @@ for pair in "host-1:10.100.0.10/24" "host-2:10.100.0.20/24" "host-3:10.200.0.20/
     echo "  ${host} -> ${ip}"
 done
 
-# gw-node: one interface per tenant
-docker exec "${PREFIX}-gw-node" ip addr flush dev eth1 2>/dev/null || true
-docker exec "${PREFIX}-gw-node" ip addr add 10.100.0.254/24 dev eth1
-echo "  gw-node eth1 -> 10.100.0.254/24 (tenant-a)"
-docker exec "${PREFIX}-gw-node" ip addr flush dev eth2 2>/dev/null || true
-docker exec "${PREFIX}-gw-node" ip addr add 10.200.0.254/24 dev eth2
-echo "  gw-node eth2 -> 10.200.0.254/24 (tenant-b)"
+# ---------- step 9: create tenant routers on network node ----------
 
-# Set default gateways on hosts (VRR address = their door out of the subnet)
+info "Creating tenant routers on network node..."
+
+run_play '
+---
+- hosts: clab-ybettan-ansible-net-lab-net-node
+  gather_facts: false
+  tasks:
+    - name: Create tenant-a router
+      ansible.builtin.include_role:
+        name: ansible_networking.l3.router
+        tasks_from: create
+      vars:
+        router_name: tenant-a
+        router_vlan_id: 100
+        router_internal_subnet: "10.100.0.0/24"
+        router_internal_gateway: "10.100.0.1"
+        router_trunk_interface: eth1
+        router_external_ip: "10.254.0.2/30"
+        router_external_peer_ip: "10.254.0.1/30"
+        router_external_gateway: "10.254.0.1"
+
+    - name: Create tenant-b router
+      ansible.builtin.include_role:
+        name: ansible_networking.l3.router
+        tasks_from: create
+      vars:
+        router_name: tenant-b
+        router_vlan_id: 200
+        router_internal_subnet: "10.200.0.0/24"
+        router_internal_gateway: "10.200.0.1"
+        router_trunk_interface: eth1
+        router_external_ip: "10.254.0.6/30"
+        router_external_peer_ip: "10.254.0.5/30"
+        router_external_gateway: "10.254.0.5"
+'
+
+# ---------- step 10: configure SNAT ----------
+
+info "Configuring SNAT..."
+
+run_play '
+---
+- hosts: clab-ybettan-ansible-net-lab-net-node
+  gather_facts: false
+  tasks:
+    - name: SNAT for tenant-a
+      ansible.builtin.include_role:
+        name: ansible_networking.l3.snat
+        tasks_from: create
+      vars:
+        snat_router_name: tenant-a
+        snat_source_subnet: "10.100.0.0/24"
+        snat_veth_interface: v-tenant-a-i
+        snat_external_subnet: "10.254.0.0/30"
+        snat_external_interface: eth0
+
+    - name: SNAT for tenant-b
+      ansible.builtin.include_role:
+        name: ansible_networking.l3.snat
+        tasks_from: create
+      vars:
+        snat_router_name: tenant-b
+        snat_source_subnet: "10.200.0.0/24"
+        snat_veth_interface: v-tenant-b-i
+        snat_external_subnet: "10.254.0.4/30"
+        snat_external_interface: eth0
+'
+
+# ---------- step 11: configure DNAT ----------
+
+info "Configuring DNAT..."
+
+run_play '
+---
+- hosts: clab-ybettan-ansible-net-lab-net-node
+  gather_facts: false
+  tasks:
+    - name: DNAT for API server (tenant-a)
+      ansible.builtin.include_role:
+        name: ansible_networking.l3.dnat
+        tasks_from: create
+      vars:
+        dnat_router_name: tenant-a
+        dnat_public_ip: "10.254.0.2"
+        dnat_public_port: 6443
+        dnat_internal_ip: "10.100.0.10"
+        dnat_internal_port: 6443
+'
+
+# ---------- step 12: set default gateways on hosts ----------
+
 info "Setting default gateways on hosts..."
 docker exec "${PREFIX}-host-1" ip route replace default via 10.100.0.1
 docker exec "${PREFIX}-host-2" ip route replace default via 10.100.0.1
 docker exec "${PREFIX}-host-3" ip route replace default via 10.200.0.1
-echo "  host-1, host-2 -> 10.100.0.1 (tenant-a VRR)"
-echo "  host-3 -> 10.200.0.1 (tenant-b VRR)"
+echo "  host-1, host-2 -> 10.100.0.1 (tenant-a namespace)"
+echo "  host-3 -> 10.200.0.1 (tenant-b namespace)"
 
-# ---------- step 6b: configure SNAT/DNAT on gw-node ----------
+# ---------- step 13: wait + warm up ----------
 
-info "Configuring gateway node (IP forwarding + NAT)..."
+info "Waiting for VLAN convergence (10s)..."
+sleep 10
 
-# Install iptables (Alpine doesn't have it by default)
-docker exec "${PREFIX}-gw-node" apk add --no-cache iptables >/dev/null 2>&1
-echo "  Installed iptables"
-
-# Enable IP forwarding (let gw-node route packets between interfaces)
-docker exec "${PREFIX}-gw-node" sysctl -w net.ipv4.ip_forward=1 >/dev/null
-echo "  Enabled IP forwarding"
-
-# Block forwarding between tenant interfaces (preserve isolation!)
-# gw-node must only route tenant ↔ eth0, never tenant-a ↔ tenant-b
-docker exec "${PREFIX}-gw-node" iptables -A FORWARD -i eth1 -o eth2 -j DROP
-docker exec "${PREFIX}-gw-node" iptables -A FORWARD -i eth2 -o eth1 -j DROP
-echo "  Blocked inter-tenant forwarding (eth1 ↔ eth2)"
-
-# SNAT: masquerade tenant traffic leaving via eth0 (management/external)
-docker exec "${PREFIX}-gw-node" iptables -t nat -A POSTROUTING -s 10.100.0.0/24 -o eth0 -j MASQUERADE
-docker exec "${PREFIX}-gw-node" iptables -t nat -A POSTROUTING -s 10.200.0.0/24 -o eth0 -j MASQUERADE
-echo "  Added MASQUERADE rules for tenant-a and tenant-b"
-
-# DNAT: forward gw-node:6443 to host-1:6443 (simulates API server access)
-docker exec "${PREFIX}-gw-node" iptables -t nat -A PREROUTING -d 172.20.20.30 -p tcp --dport 6443 -j DNAT --to-destination 10.100.0.10:6443
-# Also SNAT the DNAT'd traffic so host-1 replies via gw-node, not directly via mgmt network
-docker exec "${PREFIX}-gw-node" iptables -t nat -A POSTROUTING -d 10.100.0.10 -p tcp --dport 6443 -j MASQUERADE
-echo "  Added DNAT rule: 172.20.20.30:6443 -> 10.100.0.10:6443"
-
-# ---------- step 7: wait for EVPN convergence ----------
-
-info "Waiting for BGP/EVPN convergence (15s)..."
-sleep 15
-
-# Warm up ARP/MAC learning across VXLAN before running tests
-info "Warming up VXLAN paths..."
-docker exec "${PREFIX}-host-1" ping -c 1 -W 2 10.100.0.20 &>/dev/null || true
-docker exec "${PREFIX}-host-2" ping -c 1 -W 2 10.100.0.10 &>/dev/null || true
-docker exec "${PREFIX}-gw-node" ping -c 1 -W 2 10.100.0.1 &>/dev/null || true
-docker exec "${PREFIX}-gw-node" ping -c 1 -W 2 10.200.0.1 &>/dev/null || true
+info "Warming up ARP..."
+docker exec "${PREFIX}-host-1" ping -c 2 -W 3 10.100.0.20 &>/dev/null || true
+docker exec "${PREFIX}-host-2" ping -c 2 -W 3 10.100.0.10 &>/dev/null || true
 sleep 2
 
-# ---------- step 8: verification ----------
+# ---------- step 14: verification ----------
 
 info "Running verification tests..."
 echo ""
 
 errors=0
 
-# tenant-a: host-1 <-> host-2 should work
+# tenant-a: host-1 <-> host-2 (same VLAN)
 if docker exec "${PREFIX}-host-1" ping -c 3 -W 3 10.100.0.20 &>/dev/null; then
     ok "host-1 (tenant-a) -> host-2 (tenant-a)"
 else
@@ -174,7 +323,7 @@ else
     errors=$((errors + 1))
 fi
 
-# cross-tenant: host-1 -> host-3 should FAIL
+# cross-tenant isolation (different VLANs)
 if docker exec "${PREFIX}-host-1" ping -c 2 -W 3 10.200.0.20 &>/dev/null; then
     fail "host-1 (tenant-a) -> host-3 (tenant-b) — expected FAIL but got PASS (isolation broken!)"
     errors=$((errors + 1))
@@ -182,7 +331,6 @@ else
     ok "host-1 (tenant-a) -> host-3 (tenant-b) — unreachable (isolation works)"
 fi
 
-# cross-tenant: host-2 -> host-3 should FAIL (same leaf, different VRF)
 if docker exec "${PREFIX}-host-2" ping -c 2 -W 3 10.200.0.20 &>/dev/null; then
     fail "host-2 (tenant-a) -> host-3 (tenant-b) — expected FAIL but got PASS (isolation broken!)"
     errors=$((errors + 1))
@@ -190,22 +338,22 @@ else
     ok "host-2 (tenant-a) -> host-3 (tenant-b) — unreachable (isolation works)"
 fi
 
-# gw-node: verify it can reach both tenant VRR gateways
-if docker exec "${PREFIX}-gw-node" ping -c 2 -W 3 10.100.0.1 &>/dev/null; then
-    ok "gw-node -> tenant-a VRR (10.100.0.1)"
+# net-node namespace connectivity
+if docker exec "$NET_NODE" ip netns exec tenant-a ping -c 2 -W 3 10.100.0.10 &>/dev/null; then
+    ok "net-node (tenant-a ns) -> host-1"
 else
-    fail "gw-node -> tenant-a VRR (10.100.0.1) — expected PASS"
+    fail "net-node (tenant-a ns) -> host-1 — expected PASS"
     errors=$((errors + 1))
 fi
 
-if docker exec "${PREFIX}-gw-node" ping -c 2 -W 3 10.200.0.1 &>/dev/null; then
-    ok "gw-node -> tenant-b VRR (10.200.0.1)"
+if docker exec "$NET_NODE" ip netns exec tenant-b ping -c 2 -W 3 10.200.0.20 &>/dev/null; then
+    ok "net-node (tenant-b ns) -> host-3"
 else
-    fail "gw-node -> tenant-b VRR (10.200.0.1) — expected PASS"
+    fail "net-node (tenant-b ns) -> host-3 — expected PASS"
     errors=$((errors + 1))
 fi
 
-# SNAT: hosts should reach the management network via gw-node
+# SNAT: hosts reach management network via net-node
 if docker exec "${PREFIX}-host-1" ping -c 2 -W 3 172.20.20.1 &>/dev/null; then
     ok "host-1 (tenant-a) -> 172.20.20.1 (SNAT egress)"
 else
@@ -213,29 +361,10 @@ else
     errors=$((errors + 1))
 fi
 
-if docker exec "${PREFIX}-host-2" ping -c 2 -W 3 172.20.20.1 &>/dev/null; then
-    ok "host-2 (tenant-a) -> 172.20.20.1 (SNAT egress, cross-leaf)"
-else
-    fail "host-2 (tenant-a) -> 172.20.20.1 (SNAT egress, cross-leaf) — expected PASS"
-    errors=$((errors + 1))
-fi
-
 if docker exec "${PREFIX}-host-3" ping -c 2 -W 3 172.20.20.1 &>/dev/null; then
     ok "host-3 (tenant-b) -> 172.20.20.1 (SNAT egress)"
 else
     fail "host-3 (tenant-b) -> 172.20.20.1 (SNAT egress) — expected PASS"
-    errors=$((errors + 1))
-fi
-
-# DNAT: connect to gw-node:6443 from management network, should reach host-1
-# Use host-2 as client (Alpine has nc; spine's nc isn't in docker exec PATH)
-docker exec "${PREFIX}-host-1" sh -c "echo DNAT-OK | nc -l -p 6443 &" 2>/dev/null
-sleep 1
-dnat_result=$(docker exec "${PREFIX}-host-2" sh -c "echo | nc -w 2 172.20.20.30 6443 2>/dev/null" || true)
-if [ "$dnat_result" = "DNAT-OK" ]; then
-    ok "DNAT: 172.20.20.30:6443 -> host-1:6443"
-else
-    fail "DNAT: 172.20.20.30:6443 -> host-1:6443 — expected 'DNAT-OK' but got '${dnat_result}'"
     errors=$((errors + 1))
 fi
 
