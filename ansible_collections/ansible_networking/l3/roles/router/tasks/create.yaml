@@ -31,18 +31,18 @@
 
 - name: Create veth pair for external connectivity
   ansible.builtin.raw: |
-    ip link add veth-{{ router_name }}-in type veth peer name veth-{{ router_name }}-out
-    ip link set veth-{{ router_name }}-in netns {{ router_name }}
+    ip link add v-{{ router_name }}-i type veth peer name v-{{ router_name }}-o
+    ip link set v-{{ router_name }}-i netns {{ router_name }}
 
 - name: Configure host-side veth endpoint
   ansible.builtin.raw: |
-    ip addr add {{ router_external_peer_ip }} dev veth-{{ router_name }}-out
-    ip link set veth-{{ router_name }}-out up
+    ip addr add {{ router_external_peer_ip }} dev v-{{ router_name }}-o
+    ip link set v-{{ router_name }}-o up
 
 - name: Configure namespace-side veth endpoint and default route
   ansible.builtin.raw: |
-    ip netns exec {{ router_name }} ip addr add {{ router_external_ip }} dev veth-{{ router_name }}-in
-    ip netns exec {{ router_name }} ip link set veth-{{ router_name }}-in up
+    ip netns exec {{ router_name }} ip addr add {{ router_external_ip }} dev v-{{ router_name }}-i
+    ip netns exec {{ router_name }} ip link set v-{{ router_name }}-i up
     ip netns exec {{ router_name }} ip route add default via {{ router_external_gateway }}
 
 - name: Enable IP forwarding inside namespace

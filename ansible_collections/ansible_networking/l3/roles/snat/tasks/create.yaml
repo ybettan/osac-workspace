@@ -4,7 +4,7 @@
 # Required variables:
 #   snat_router_name: namespace name (e.g., "tenant-alpha")
 #   snat_source_subnet: tenant subnet (e.g., "10.100.0.0/24")
-#   snat_veth_interface: namespace-side veth name (e.g., "veth-tenant-alpha-in")
+#   snat_veth_interface: namespace-side veth name (e.g., "v-tenant-alpha-i")
 #   snat_external_subnet: veth link subnet (e.g., "10.254.0.0/30")
 #   snat_external_interface: host external interface (e.g., "eth0")
 

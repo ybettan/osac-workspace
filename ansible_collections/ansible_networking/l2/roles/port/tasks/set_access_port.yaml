@@ -4,5 +4,4 @@
     name: network-runner
     tasks_from: conf_access_port
   vars:
-    port_name: "{{ port_name }}"
-    vlan_id: "{{ vlan_id }}"
+    port_description: "{{ port_name }}-vlan{{ vlan_id }}"

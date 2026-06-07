@@ -11,5 +11,5 @@
   ignore_errors: true
 
 - name: Clean up host-side veth endpoint
-  ansible.builtin.raw: ip link delete veth-{{ router_name }}-out
+  ansible.builtin.raw: ip link delete v-{{ router_name }}-o
   ignore_errors: true
