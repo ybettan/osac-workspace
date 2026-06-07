@@ -3,30 +3,25 @@ all:
     ansible_user: cumulus
     ansible_password: cumulus
     ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-    # become is set per-task where needed (e.g. net commit)
     ansible_become_password: cumulus
+    ansible_network_os: cumulus
 
   children:
     switches:
-      children:
-        spine:
-          hosts:
-            clab-ybettan-ansible-net-lab-spine:
-              ansible_host: 172.20.20.10
-        leaves:
-          hosts:
-            clab-ybettan-ansible-net-lab-leaf-1:
-              ansible_host: 172.20.20.11
-              # Data-plane ports
-              server_port: swp2      # facing host-1
-              gateway_port_a: swp3   # facing gw-node eth1 (tenant-a)
-              gateway_port_b: swp4   # facing gw-node eth2 (tenant-b)
-              uplink_port: swp1      # facing spine
-            clab-ybettan-ansible-net-lab-leaf-2:
-              ansible_host: 172.20.20.12
-              server_port: swp2    # facing host-2
-              tenant_b_port: swp3  # facing host-3
-              uplink_port: swp1    # facing spine
+      hosts:
+        clab-ybettan-ansible-net-lab-leaf-1:
+          ansible_host: 172.20.20.11
+          # Ports
+          trunk_ports: [swp1, swp3]    # swp1=inter-switch, swp3=net-node
+          access_ports:
+            swp2: host-1               # facing host-1
+        clab-ybettan-ansible-net-lab-leaf-2:
+          ansible_host: 172.20.20.12
+          # Ports
+          trunk_ports: [swp1]          # swp1=inter-switch
+          access_ports:
+            swp2: host-2               # facing host-2
+            swp3: host-3               # facing host-3
 
     hosts:
       hosts:
@@ -39,6 +34,7 @@ all:
         clab-ybettan-ansible-net-lab-host-3:
           ansible_host: 172.20.20.22
           ansible_user: root
-        clab-ybettan-ansible-net-lab-gw-node:
+        clab-ybettan-ansible-net-lab-net-node:
           ansible_host: 172.20.20.30
           ansible_user: root
+          ansible_password: root

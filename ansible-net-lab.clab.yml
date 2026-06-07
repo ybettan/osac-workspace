@@ -8,14 +8,7 @@ topology:
       image: alpine:3.19
 
   nodes:
-    # Spine switch
-    spine:
-      kind: cvx
-      mgmt-ipv4: 172.20.20.10
-      binds:
-        - /lib/modules:/lib/modules:ro
-
-    # Leaf switches
+    # Leaf switches (no spine — VLAN-only, no BGP routing needed)
     leaf-1:
       kind: cvx
       mgmt-ipv4: 172.20.20.11
@@ -41,20 +34,18 @@ topology:
       kind: linux
       mgmt-ipv4: 172.20.20.22
 
-    # Linux gateway node (SNAT/DNAT -- replaces Netris SoftGate)
-    gw-node:
+    # Network node (per-tenant routing, SNAT/DNAT via Linux namespaces)
+    net-node:
       kind: linux
       mgmt-ipv4: 172.20.20.30
 
   links:
-    # Spine <-> Leaf uplinks
-    - endpoints: ["spine:swp1", "leaf-1:swp1"]
-    - endpoints: ["spine:swp2", "leaf-2:swp1"]
+    # Leaf-1 <-> Leaf-2 trunk (carries all VLANs between switches)
+    - endpoints: ["leaf-1:swp1", "leaf-2:swp1"]
 
-    # Leaf-1 <-> hosts + gateway
+    # Leaf-1 <-> hosts + network node
     - endpoints: ["leaf-1:swp2", "host-1:eth1"]
-    - endpoints: ["leaf-1:swp3", "gw-node:eth1"]
-    - endpoints: ["leaf-1:swp4", "gw-node:eth2"]
+    - endpoints: ["leaf-1:swp3", "net-node:eth1"]
 
     # Leaf-2 <-> hosts
     - endpoints: ["leaf-2:swp2", "host-2:eth1"]
