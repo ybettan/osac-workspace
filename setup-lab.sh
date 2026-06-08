@@ -6,6 +6,10 @@
 # Prerequisites:
 #   pip install git+https://github.com/ybettan/network-runner.git
 #
+# TODO: network-runner PR pending at https://github.com/ansible-network/network-runner/pull/76
+# If upstream remains inactive, absorb the role + providers into the
+# ansible.l2 collection in osac-aap to eliminate the pip dependency.
+#
 # The ansible.l2 and ansible.l3 collections live in osac-aap.
 # Override OSAC_AAP_DIR to point to a different clone.
 #
