@@ -122,21 +122,56 @@ echo "  Installed iptables + iproute2 + python3 + openssh (sshd running)"
 # RUNTIME SIMULATION (what OSAC orchestration would do)
 # ============================================================
 
-# ---------- step 6: provision tenant-a (VLAN 100) ----------
+# ---------- allocate VLANs via IPAM ----------
 
-info "Provisioning tenant-a (VLAN 100)..."
+info "Allocating VLANs via IPAM..."
+
+run_play '
+---
+- hosts: clab-ybettan-ansible-net-lab-net-node
+  gather_facts: false
+  tasks:
+    - name: Allocate VLAN for tenant-a
+      ansible.builtin.include_role:
+        name: ansible.l3.ipam
+        tasks_from: allocate_vlan
+      vars:
+        ipam_state_file: /etc/osac/network_state.json
+        ipam_vlan_pool_start: "{{ vlan_range_start }}"
+        ipam_vlan_pool_end: "{{ vlan_range_end }}"
+        ipam_purpose: tenant-a
+
+    - name: Allocate VLAN for tenant-b
+      ansible.builtin.include_role:
+        name: ansible.l3.ipam
+        tasks_from: allocate_vlan
+      vars:
+        ipam_state_file: /etc/osac/network_state.json
+        ipam_vlan_pool_start: "{{ vlan_range_start }}"
+        ipam_vlan_pool_end: "{{ vlan_range_end }}"
+        ipam_purpose: tenant-b
+'
+
+VLAN_A=$(docker exec "$NET_NODE" python3 -c "import json; print(json.load(open('/etc/osac/network_state.json'))['vlans']['tenant-a'])")
+VLAN_B=$(docker exec "$NET_NODE" python3 -c "import json; print(json.load(open('/etc/osac/network_state.json'))['vlans']['tenant-b'])")
+echo "  tenant-a: VLAN ${VLAN_A} (10.${VLAN_A}.0.0/24)"
+echo "  tenant-b: VLAN ${VLAN_B} (10.${VLAN_B}.0.0/24)"
+
+# ---------- step 6: provision tenant-a ----------
+
+info "Provisioning tenant-a (VLAN ${VLAN_A})..."
 
 run_play '
 ---
 - hosts: switches
   gather_facts: false
   tasks:
-    - name: Create VLAN 100
+    - name: Create tenant-a VLAN
       ansible.builtin.include_role:
         name: ansible.l2.vlan
         tasks_from: create
       vars:
-        vlan_id: 100
+        vlan_id: '"${VLAN_A}"'
 
     - name: Assign host-1 port (leaf-1:swp2)
       ansible.builtin.include_role:
@@ -144,7 +179,7 @@ run_play '
         tasks_from: set_access_port
       vars:
         port_name: swp2
-        vlan_id: 100
+        vlan_id: '"${VLAN_A}"'
       when: inventory_hostname == "clab-ybettan-ansible-net-lab-leaf-1"
 
     - name: Assign host-2 port (leaf-2:swp2)
@@ -153,25 +188,25 @@ run_play '
         tasks_from: set_access_port
       vars:
         port_name: swp2
-        vlan_id: 100
+        vlan_id: '"${VLAN_A}"'
       when: inventory_hostname == "clab-ybettan-ansible-net-lab-leaf-2"
 '
 
-# ---------- step 7: provision tenant-b (VLAN 200) ----------
+# ---------- step 7: provision tenant-b ----------
 
-info "Provisioning tenant-b (VLAN 200)..."
+info "Provisioning tenant-b (VLAN ${VLAN_B})..."
 
 run_play '
 ---
 - hosts: switches
   gather_facts: false
   tasks:
-    - name: Create VLAN 200
+    - name: Create tenant-b VLAN
       ansible.builtin.include_role:
         name: ansible.l2.vlan
         tasks_from: create
       vars:
-        vlan_id: 200
+        vlan_id: '"${VLAN_B}"'
 
     - name: Assign host-3 port (leaf-2:swp3)
       ansible.builtin.include_role:
@@ -179,14 +214,14 @@ run_play '
         tasks_from: set_access_port
       vars:
         port_name: swp3
-        vlan_id: 200
+        vlan_id: '"${VLAN_B}"'
       when: inventory_hostname == "clab-ybettan-ansible-net-lab-leaf-2"
 '
 
 # ---------- step 8: assign host IPs ----------
 
 info "Assigning host IPs..."
-for pair in "host-1:10.100.0.10/24" "host-2:10.100.0.20/24" "host-3:10.200.0.20/24"; do
+for pair in "host-1:10.${VLAN_A}.0.10/24" "host-2:10.${VLAN_A}.0.20/24" "host-3:10.${VLAN_B}.0.20/24"; do
     host="${pair%%:*}"
     ip="${pair##*:}"
     container="${PREFIX}-${host}"
@@ -210,9 +245,9 @@ run_play '
         tasks_from: create
       vars:
         router_name: tenant-a
-        router_vlan_id: 100
-        router_internal_subnet: "10.100.0.0/24"
-        router_internal_gateway: "10.100.0.1"
+        router_vlan_id: '"${VLAN_A}"'
+        router_internal_subnet: "10.'"${VLAN_A}"'.0.0/24"
+        router_internal_gateway: "10.'"${VLAN_A}"'.0.1"
         router_trunk_interface: eth1
         router_external_ip: "10.254.0.2/30"
         router_external_peer_ip: "10.254.0.1/30"
@@ -224,9 +259,9 @@ run_play '
         tasks_from: create
       vars:
         router_name: tenant-b
-        router_vlan_id: 200
-        router_internal_subnet: "10.200.0.0/24"
-        router_internal_gateway: "10.200.0.1"
+        router_vlan_id: '"${VLAN_B}"'
+        router_internal_subnet: "10.'"${VLAN_B}"'.0.0/24"
+        router_internal_gateway: "10.'"${VLAN_B}"'.0.1"
         router_trunk_interface: eth1
         router_external_ip: "10.254.0.6/30"
         router_external_peer_ip: "10.254.0.5/30"
@@ -248,7 +283,7 @@ run_play '
         tasks_from: create
       vars:
         snat_router_name: tenant-a
-        snat_source_subnet: "10.100.0.0/24"
+        snat_source_subnet: "10.'"${VLAN_A}"'.0.0/24"
         snat_veth_interface: v-tenant-a-i
         snat_external_subnet: "10.254.0.0/30"
         snat_external_interface: eth0
@@ -259,7 +294,7 @@ run_play '
         tasks_from: create
       vars:
         snat_router_name: tenant-b
-        snat_source_subnet: "10.200.0.0/24"
+        snat_source_subnet: "10.'"${VLAN_B}"'.0.0/24"
         snat_veth_interface: v-tenant-b-i
         snat_external_subnet: "10.254.0.4/30"
         snat_external_interface: eth0
@@ -282,18 +317,18 @@ run_play '
         dnat_router_name: tenant-a
         dnat_public_ip: "10.254.0.2"
         dnat_public_port: 6443
-        dnat_internal_ip: "10.100.0.10"
+        dnat_internal_ip: "10.'"${VLAN_A}"'.0.10"
         dnat_internal_port: 6443
 '
 
 # ---------- step 12: set default gateways on hosts ----------
 
 info "Setting default gateways on hosts..."
-docker exec "${PREFIX}-host-1" ip route replace default via 10.100.0.1
-docker exec "${PREFIX}-host-2" ip route replace default via 10.100.0.1
-docker exec "${PREFIX}-host-3" ip route replace default via 10.200.0.1
-echo "  host-1, host-2 -> 10.100.0.1 (tenant-a namespace)"
-echo "  host-3 -> 10.200.0.1 (tenant-b namespace)"
+docker exec "${PREFIX}-host-1" ip route replace default via "10.${VLAN_A}.0.1"
+docker exec "${PREFIX}-host-2" ip route replace default via "10.${VLAN_A}.0.1"
+docker exec "${PREFIX}-host-3" ip route replace default via "10.${VLAN_B}.0.1"
+echo "  host-1, host-2 -> 10.${VLAN_A}.0.1 (tenant-a namespace)"
+echo "  host-3 -> 10.${VLAN_B}.0.1 (tenant-b namespace)"
 
 # ---------- step 13: wait + warm up ----------
 
@@ -313,14 +348,14 @@ echo ""
 errors=0
 
 # tenant-a: host-1 <-> host-2 (same VLAN)
-if docker exec "${PREFIX}-host-1" ping -c 3 -W 3 10.100.0.20 &>/dev/null; then
+if docker exec "${PREFIX}-host-1" ping -c 3 -W 3 "10.${VLAN_A}.0.20" &>/dev/null; then
     ok "host-1 (tenant-a) -> host-2 (tenant-a)"
 else
     fail "host-1 (tenant-a) -> host-2 (tenant-a) — expected PASS"
     errors=$((errors + 1))
 fi
 
-if docker exec "${PREFIX}-host-2" ping -c 2 -W 3 10.100.0.10 &>/dev/null; then
+if docker exec "${PREFIX}-host-2" ping -c 2 -W 3 "10.${VLAN_A}.0.10" &>/dev/null; then
     ok "host-2 (tenant-a) -> host-1 (tenant-a)"
 else
     fail "host-2 (tenant-a) -> host-1 (tenant-a) — expected PASS"
@@ -328,14 +363,14 @@ else
 fi
 
 # cross-tenant isolation (different VLANs)
-if docker exec "${PREFIX}-host-1" ping -c 2 -W 3 10.200.0.20 &>/dev/null; then
+if docker exec "${PREFIX}-host-1" ping -c 2 -W 3 "10.${VLAN_B}.0.20" &>/dev/null; then
     fail "host-1 (tenant-a) -> host-3 (tenant-b) — expected FAIL but got PASS (isolation broken!)"
     errors=$((errors + 1))
 else
     ok "host-1 (tenant-a) -> host-3 (tenant-b) — unreachable (isolation works)"
 fi
 
-if docker exec "${PREFIX}-host-2" ping -c 2 -W 3 10.200.0.20 &>/dev/null; then
+if docker exec "${PREFIX}-host-2" ping -c 2 -W 3 "10.${VLAN_B}.0.20" &>/dev/null; then
     fail "host-2 (tenant-a) -> host-3 (tenant-b) — expected FAIL but got PASS (isolation broken!)"
     errors=$((errors + 1))
 else
@@ -343,14 +378,14 @@ else
 fi
 
 # net-node namespace connectivity
-if docker exec "$NET_NODE" ip netns exec tenant-a ping -c 2 -W 3 10.100.0.10 &>/dev/null; then
+if docker exec "$NET_NODE" ip netns exec tenant-a ping -c 2 -W 3 "10.${VLAN_A}.0.10" &>/dev/null; then
     ok "net-node (tenant-a ns) -> host-1"
 else
     fail "net-node (tenant-a ns) -> host-1 — expected PASS"
     errors=$((errors + 1))
 fi
 
-if docker exec "$NET_NODE" ip netns exec tenant-b ping -c 2 -W 3 10.200.0.20 &>/dev/null; then
+if docker exec "$NET_NODE" ip netns exec tenant-b ping -c 2 -W 3 "10.${VLAN_B}.0.20" &>/dev/null; then
     ok "net-node (tenant-b ns) -> host-3"
 else
     fail "net-node (tenant-b ns) -> host-3 — expected PASS"
