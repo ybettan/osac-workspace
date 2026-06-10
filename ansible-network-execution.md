@@ -377,12 +377,91 @@ All 8 tests pass with the new paths.
 
 ---
 
-## Phase 5: Register and Test End-to-End Through OSAC
+## Phase 5: OSAC Template Role Integration
 
-*(ready to start)*
+### Step 20 — Create template role structure
+
+Created `osac.templates.ansible_networking` at `osac-aap/collections/ansible_collections/osac/templates/roles/ansible_networking/`:
+
+- `meta/osac.yaml` — registers as `template_type: network`, `implementation_strategy: ansible_networking`
+- `meta/argument_specs.yaml` — mirrors Netris pattern: each task receives its CR dict + optional template_parameters
+- `defaults/main.yaml` — `ansible_networking_inventory_file`, `ansible_networking_collections_path`, `ansible_networking_roles_path`, IPAM state file path, VLAN pool range, interfaces
+
+**Result:** Committed in osac-aap ✓
+
+### Steps 21-22 — Implement VirtualNetwork and Subnet create/delete
+
+**Resource mapping:**
+- VirtualNetwork → VLAN allocation (l3.ipam on net-node) + VLAN on switches (l2.vlan)
+- Subnet → router namespace with gateway (l3.router on net-node)
+- SecurityGroup → stub (iptables ACLs deferred)
+
+**SNAT/DNAT decision:** Initially included SNAT in `create_subnet` for convenience, but removed it to match the OSAC model where NATGateway and PublicIPAttachment are separate resources.
+
+**Result:** 6 task files created (create/delete for VN, Subnet, SG) ✓
+
+### Step 24 — Solve localhost dispatch problem
+
+**Problem:** The EDA dispatcher runs the template role on `localhost`, but our l2/l3 roles need to run on switches (via network-runner) and net-node (via raw SSH). Ansible does NOT support `delegate_to` on `include_role`.
+
+**Solution explored:**
+1. ~~Inline raw commands with delegate_to~~ — loses vendor abstraction (network-runner)
+2. **Helper playbooks via `command`** — ✓ chosen
+3. ~~Restructure roles~~ — same problem, just relocated
+
+**Implementation:** Created 6 helper playbooks in `playbooks/`:
+- `l3_ipam_allocate_vlan.yaml` / `l3_ipam_release_vlan.yaml` → `hosts: net_nodes`
+- `l2_create_vlan.yaml` / `l2_delete_vlan.yaml` → `hosts: switches`
+- `l3_create_subnet.yaml` / `l3_delete_subnet.yaml` → `hosts: net_nodes`
+
+Each helper includes a TODO noting the redundancy with l2/l3 collections.
+
+Template role tasks invoke helpers via `ansible.builtin.command: ansible-playbook ...` with `environment:` block to propagate `ANSIBLE_COLLECTIONS_PATH` and `ANSIBLE_ROLES_PATH`.
+
+**Issues encountered:**
+1. **`delegate_to` on `include_role`** — Ansible error: `'delegate_to' is not a valid attribute for a IncludeRole`. Switched to helper playbook approach.
+2. **`inventory_file` undefined** — Ansible magic variable not available when running from stdin. Added `ansible_networking_inventory_file` to role defaults with `realpath` filter.
+3. **Relative inventory path in child** — `ansible-playbook -i ansible/inventory.yml` failed in child process (different working directory). Fixed by requiring an absolute path.
+4. **`net_nodes` group missing** — inventory only had a `hosts` group. Moved net-node into its own `net_nodes` group.
+5. **Environment not propagated** — child `ansible-playbook` couldn't find collections. Added `environment:` block with `ANSIBLE_COLLECTIONS_PATH` and `ANSIBLE_ROLES_PATH` to all `command` tasks.
+6. **Child skipped hosts** — `skipping: no hosts matched` in child output. Root cause was the relative inventory path (issue #3 above).
+
+**Result:** Committed in osac-aap (`ee480fc`) ✓
+
+### Steps 25-26 — Infra mode and inventory update
+
+- Added `./setup-lab.sh infra` mode — deploys admin setup (steps 1-5), exits before runtime provisioning
+- Moved net-node from `hosts` to `net_nodes` inventory group
+
+**Result:** Committed in osac-workspace (`9dc8922`, `938286f`) ✓
+
+### Step 27 — End-to-end test in containerlab
+
+Tested all 4 operations with simulated CR payloads from localhost:
+
+```
+# Create VirtualNetwork 'my-net'
+VirtualNetwork 'my-net' created (VLAN 100)
+  → IPAM state: {"vlans": {"my-net": 100}}
+  → VLAN 100 created on both switches
+
+# Create Subnet 'my-subnet' in VN 'my-net'
+Subnet 'my-subnet' created (VLAN 100, gateway 10.100.1.1)
+  → Router namespace 'my-subnet' created on net-node
+
+# Delete Subnet 'my-subnet'
+Subnet 'my-subnet' deleted
+  → Namespace removed
+
+# Delete VirtualNetwork 'my-net'
+VirtualNetwork 'my-net' deleted
+  → VLAN deleted from switches, IPAM state: {"vlans": {}}
+```
+
+**Result:** Phase 5 complete ✓
 
 ---
 
 ## Phase 6: Multi-Tenant Isolation Test
 
-*(pending Phase 5 completion)*
+*(pending)*

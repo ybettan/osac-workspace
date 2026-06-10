@@ -113,17 +113,20 @@ Goal: Extract the manual playbook logic into reusable `ansible_networking` colle
 | 17 | **Refactor `setup-lab.sh`** — replace inline docker exec commands with `ansible_networking.l2`/`l3` collection calls. Add `run_play()` helper, network-runner role path resolution, openssh on net-node. |
 | 18 | **Validate end-to-end** — all 8 tests pass: L2 connectivity, cross-tenant isolation, namespace routing, SNAT egress, DNAT ingress. |
 
-### Phase 5: Register and Test End-to-End Through OSAC
+### Phase 5: OSAC Template Role Integration
 
-Goal: Use the new backend to provision a real hosted cluster via the OSAC pipeline.
+Goal: Create an `osac.templates.ansible_networking` template role that plugs into the OSAC EDA dispatcher, mapping OSAC networking resources to our l2/l3 collections. Test in containerlab.
 
 | # | Step |
 |---|------|
-| 20 | **Create `meta/osac.yaml`** for the new template role -- registers the Ansible networking class with AAP. |
-| 21 | **Add AAP environment variables** -- `NETWORK_STEPS_COLLECTION=ansible.steps`, switch SSH credentials, gateway config. Update `scripts/aap-configuration.sh`. |
-| 22 | **Run `playbook_osac_config_as_code.yml`** to register the new job templates with AAP. |
-| 23 | **Test cluster creation** -- `osac create cluster-order` with the Ansible backend. Verify: workers allocated, switch configured (VLAN/VRF), agents join, hosted cluster reaches Ready. |
-| 24 | **Test cluster deletion** -- verify switch config cleaned up, iptables rules removed, DNS deleted, workers released. |
+| 20 | **Create template role structure** — `meta/osac.yaml` (registers as `implementation_strategy: ansible_networking`), `meta/argument_specs.yaml` (CR input contract), `defaults/main.yaml` (IPAM, VLAN pool, interfaces). |
+| 21 | **Implement VirtualNetwork create/delete** — allocate VLAN via IPAM on net-node, create/delete VLAN on switches via l2.vlan. |
+| 22 | **Implement Subnet create/delete** — create/delete router namespace on net-node via l3.router. SNAT/DNAT deferred to separate NATGateway/PublicIPAttachment resources. |
+| 23 | **Stub SecurityGroup create/delete** — placeholder for iptables ACL enforcement. |
+| 24 | **Solve localhost dispatch problem** — EDA dispatcher runs on localhost, but l2/l3 roles must execute on switches/net-node. `delegate_to` doesn't work with `include_role` (Ansible limitation). Solution: helper playbooks in `playbooks/` directory invoked via `ansible.builtin.command: ansible-playbook ...`. |
+| 25 | **Add `infra` mode to setup-lab.sh** — `./setup-lab.sh infra` deploys admin setup only, skipping runtime provisioning. Enables clean testing of the template role. |
+| 26 | **Add `net_nodes` inventory group** — net-node moved from `hosts` to `net_nodes` group so helper playbooks can target it with `hosts: net_nodes`. |
+| 27 | **Test end-to-end in containerlab** — simulate CR payloads, verify create/delete for VirtualNetwork and Subnet. All operations pass. |
 
 ### Phase 6: Multi-Tenant Isolation Test
 
