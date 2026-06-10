@@ -3,6 +3,11 @@
 # Run WITHOUT sudo: ./setup-lab.sh
 # The script uses sudo internally only for containerlab commands.
 #
+# Usage:
+#   ./setup-lab.sh            Deploy infra + runtime (full lab)
+#   ./setup-lab.sh infra      Deploy infra only (admin setup, no tenant provisioning)
+#   ./setup-lab.sh destroy    Tear down the lab
+#
 # Prerequisites:
 #   pip install git+https://github.com/ybettan/network-runner.git
 #
@@ -117,6 +122,13 @@ docker exec "$NET_NODE" sh -c "echo 'root:root' | chpasswd"
 docker exec "$NET_NODE" sh -c "echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config"
 docker exec "$NET_NODE" /usr/sbin/sshd
 echo "  Installed iptables + iproute2 + python3 + openssh (sshd running)"
+
+# ---------- infra-only exit ----------
+
+if [ "${1:-}" = "infra" ]; then
+    info "Infra-only mode — admin setup complete. Skipping runtime provisioning."
+    exit 0
+fi
 
 # ============================================================
 # RUNTIME SIMULATION (what OSAC orchestration would do)
