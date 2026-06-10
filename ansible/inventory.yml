@@ -23,6 +23,13 @@ all:
             swp2: host-2               # facing host-2
             swp3: host-3               # facing host-3
 
+    net_nodes:
+      hosts:
+        clab-ybettan-ansible-net-lab-net-node:
+          ansible_host: 172.20.20.30
+          ansible_user: root
+          ansible_password: root
+
     hosts:
       hosts:
         clab-ybettan-ansible-net-lab-host-1:
@@ -34,7 +41,3 @@ all:
         clab-ybettan-ansible-net-lab-host-3:
           ansible_host: 172.20.20.22
           ansible_user: root
-        clab-ybettan-ansible-net-lab-net-node:
-          ansible_host: 172.20.20.30
-          ansible_user: root
-          ansible_password: root
