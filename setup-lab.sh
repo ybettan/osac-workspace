@@ -8,14 +8,8 @@
 #   ./setup-lab.sh infra      Deploy infra only (admin setup, no tenant provisioning)
 #   ./setup-lab.sh destroy    Tear down the lab
 #
-# Prerequisites:
-#   pip install git+https://github.com/ybettan/network-runner.git
-#
-# TODO: network-runner PR pending at https://github.com/ansible-network/network-runner/pull/76
-# If upstream remains inactive, absorb the role + providers into the
-# ansible.l2 collection in osac-aap to eliminate the pip dependency.
-#
 # The ansible.l2 and ansible.l3 collections live in osac-aap.
+# The ansible_network.network_runner collection is vendored in osac-aap.
 # Override OSAC_AAP_DIR to point to a different clone.
 #
 set -euo pipefail
@@ -30,10 +24,8 @@ SWITCHES=("${PREFIX}-leaf-1" "${PREFIX}-leaf-2")
 NET_NODE="${PREFIX}-net-node"
 
 # Ansible paths
-OSAC_AAP_DIR="${OSAC_AAP_DIR:-${SCRIPT_DIR}/../osac-aap}"
-NR_ROLES_PATH="$(python3 -c "import network_runner; import os; print(os.path.join(os.path.dirname(network_runner.__file__), '..', 'etc', 'ansible', 'roles'))")"
-export ANSIBLE_ROLES_PATH="${NR_ROLES_PATH}"
-export ANSIBLE_COLLECTIONS_PATH="${OSAC_AAP_DIR}/collections"
+OSAC_AAP_DIR="${OSAC_AAP_DIR:-${SCRIPT_DIR}/osac-aap}"
+export ANSIBLE_COLLECTIONS_PATH="${OSAC_AAP_DIR}/collections:${OSAC_AAP_DIR}/vendor"
 
 INVENTORY="${SCRIPT_DIR}/ansible/inventory.yml"
 VARS="${SCRIPT_DIR}/ansible/vars/all.yml"

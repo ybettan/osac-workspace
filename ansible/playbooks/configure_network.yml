@@ -6,8 +6,7 @@
 # Everything else (VLAN creation, access port assignment) happens
 # at runtime when the orchestration layer provisions a tenant.
 #
-# Uses the network-runner role for vendor-agnostic switch config.
-# Install: pip install git+https://github.com/ybettan/network-runner.git
+# Uses the ansible_network.network_runner collection (vendored in osac-aap).
 
 - name: Configure trunk ports on all switches
   hosts: switches
@@ -15,7 +14,7 @@
   tasks:
     - name: Configure trunk port {{ trunk_port }}
       ansible.builtin.include_role:
-        name: network-runner
+        name: ansible_network.network_runner.switch
         tasks_from: conf_trunk_port
       vars:
         port_name: "{{ trunk_port }}"
