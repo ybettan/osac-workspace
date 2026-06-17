@@ -8,7 +8,7 @@
 #   ./setup-lab.sh infra      Deploy infra only (admin setup, no tenant provisioning)
 #   ./setup-lab.sh destroy    Tear down the lab
 #
-# The ansible.l2 and ansible.l3 collections live in osac-aap.
+# The agentless_net.l2, agentless_net.l3, and agentless_net.ipam collections live in osac-aap.
 # The ansible_network.network_runner collection is vendored in osac-aap.
 # Override OSAC_AAP_DIR to point to a different clone.
 #
@@ -137,8 +137,8 @@ run_play '
   tasks:
     - name: Allocate VLAN for tenant-a
       ansible.builtin.include_role:
-        name: ansible.l3.ipam
-        tasks_from: allocate_vlan
+        name: agentless_net.ipam.vlan_id
+        tasks_from: allocate
       vars:
         ipam_state_file: /etc/osac/network_state.json
         ipam_vlan_pool_start: "{{ vlan_range_start }}"
@@ -147,8 +147,8 @@ run_play '
 
     - name: Allocate VLAN for tenant-b
       ansible.builtin.include_role:
-        name: ansible.l3.ipam
-        tasks_from: allocate_vlan
+        name: agentless_net.ipam.vlan_id
+        tasks_from: allocate
       vars:
         ipam_state_file: /etc/osac/network_state.json
         ipam_vlan_pool_start: "{{ vlan_range_start }}"
@@ -172,14 +172,14 @@ run_play '
   tasks:
     - name: Create tenant-a VLAN
       ansible.builtin.include_role:
-        name: ansible.l2.vlan
+        name: agentless_net.l2.vlan
         tasks_from: create
       vars:
         vlan_id: '"${VLAN_A}"'
 
     - name: Assign host-1 port (leaf-1:swp2)
       ansible.builtin.include_role:
-        name: ansible.l2.port
+        name: agentless_net.l2.port
         tasks_from: set_access_port
       vars:
         port_name: swp2
@@ -188,7 +188,7 @@ run_play '
 
     - name: Assign host-2 port (leaf-2:swp2)
       ansible.builtin.include_role:
-        name: ansible.l2.port
+        name: agentless_net.l2.port
         tasks_from: set_access_port
       vars:
         port_name: swp2
@@ -207,14 +207,14 @@ run_play '
   tasks:
     - name: Create tenant-b VLAN
       ansible.builtin.include_role:
-        name: ansible.l2.vlan
+        name: agentless_net.l2.vlan
         tasks_from: create
       vars:
         vlan_id: '"${VLAN_B}"'
 
     - name: Assign host-3 port (leaf-2:swp3)
       ansible.builtin.include_role:
-        name: ansible.l2.port
+        name: agentless_net.l2.port
         tasks_from: set_access_port
       vars:
         port_name: swp3
@@ -245,7 +245,7 @@ run_play '
   tasks:
     - name: Create tenant-a router
       ansible.builtin.include_role:
-        name: ansible.l3.router
+        name: agentless_net.l3.router
         tasks_from: create
       vars:
         router_name: tenant-a
@@ -259,7 +259,7 @@ run_play '
 
     - name: Create tenant-b router
       ansible.builtin.include_role:
-        name: ansible.l3.router
+        name: agentless_net.l3.router
         tasks_from: create
       vars:
         router_name: tenant-b
@@ -283,7 +283,7 @@ run_play '
   tasks:
     - name: SNAT for tenant-a
       ansible.builtin.include_role:
-        name: ansible.l3.snat
+        name: agentless_net.l3.snat
         tasks_from: create
       vars:
         snat_router_name: tenant-a
@@ -294,7 +294,7 @@ run_play '
 
     - name: SNAT for tenant-b
       ansible.builtin.include_role:
-        name: ansible.l3.snat
+        name: agentless_net.l3.snat
         tasks_from: create
       vars:
         snat_router_name: tenant-b
@@ -315,7 +315,7 @@ run_play '
   tasks:
     - name: DNAT for API server (tenant-a)
       ansible.builtin.include_role:
-        name: ansible.l3.dnat
+        name: agentless_net.l3.dnat
         tasks_from: create
       vars:
         dnat_router_name: tenant-a
