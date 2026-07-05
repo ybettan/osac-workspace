@@ -22,6 +22,7 @@ EXTERNAL_ACCESS_PLAYBOOKS="${OSAC_COLLECTIONS}/agentless_net/steps/roles/externa
 LAB_NAME="ybettan-ansible-net-lab"
 PREFIX="clab-${LAB_NAME}"
 NET_NODE="${PREFIX}-net-node"
+UPSTREAM_ROUTER="${PREFIX}-upstream-router"
 
 # Shared test parameters
 IPAM_STATE_FILE="/etc/osac/network_state.json"
@@ -87,8 +88,12 @@ cleanup() {
     echo ""
     info "Cleaning up provisioned resources..."
 
-    # Tenant-a external_access delete (best-effort)
+    # Tenant-a BGP withdraw + external_access delete (best-effort)
     if [ -n "${TENANT_A_API_PUBLIC_IP:-}" ]; then
+        run_playbook "Cleanup: Withdraw API route" \
+            -e bgp_public_ip="${TENANT_A_API_PUBLIC_IP}" \
+            -e bgp_next_hop="${TENANT_A_EXTERNAL_GATEWAY:-0.0.0.0}" \
+            "${EXTERNAL_ACCESS_PLAYBOOKS}/bgp_withdraw.yaml" 2>/dev/null || true
         run_playbook "Cleanup: Delete DNAT (API)" \
             -e dnat_router_name="${TENANT_A}" \
             -e dnat_public_ip="${TENANT_A_API_PUBLIC_IP}" \
@@ -104,6 +109,10 @@ cleanup() {
             "${EXTERNAL_ACCESS_PLAYBOOKS}/ipam_release_ip.yaml" 2>/dev/null || true
     fi
     if [ -n "${TENANT_A_INGRESS_PUBLIC_IP:-}" ]; then
+        run_playbook "Cleanup: Withdraw ingress route" \
+            -e bgp_public_ip="${TENANT_A_INGRESS_PUBLIC_IP}" \
+            -e bgp_next_hop="${TENANT_A_EXTERNAL_GATEWAY:-0.0.0.0}" \
+            "${EXTERNAL_ACCESS_PLAYBOOKS}/bgp_withdraw.yaml" 2>/dev/null || true
         run_playbook "Cleanup: Delete DNAT (ingress HTTP)" \
             -e dnat_router_name="${TENANT_A}" \
             -e dnat_public_ip="${TENANT_A_INGRESS_PUBLIC_IP}" \
@@ -357,6 +366,16 @@ run_playbook "Create DNAT — ingress HTTPS (tenant-a)" \
     -e dnat_protocol=tcp \
     "${EXTERNAL_ACCESS_PLAYBOOKS}/l3_create_dnat.yaml"
 
+run_playbook "Announce API PublicIP route (tenant-a)" \
+    -e bgp_public_ip="${TENANT_A_API_PUBLIC_IP}" \
+    -e bgp_next_hop="${TENANT_A_EXTERNAL_GATEWAY}" \
+    "${EXTERNAL_ACCESS_PLAYBOOKS}/bgp_announce.yaml"
+
+run_playbook "Announce ingress PublicIP route (tenant-a)" \
+    -e bgp_public_ip="${TENANT_A_INGRESS_PUBLIC_IP}" \
+    -e bgp_next_hop="${TENANT_A_EXTERNAL_GATEWAY}" \
+    "${EXTERNAL_ACCESS_PLAYBOOKS}/bgp_announce.yaml"
+
 # ---------------------------------------------------------------
 # PHASE 4: Host setup
 # ---------------------------------------------------------------
@@ -470,10 +489,54 @@ else
 fi
 
 # ---------------------------------------------------------------
-# PHASE 7: Idempotency — re-run tenant-a creates
+# PHASE 7: BGP verification
 # ---------------------------------------------------------------
 echo ""
-echo ">>> PHASE 7: Idempotency — re-run tenant-a creates"
+echo ">>> PHASE 7: BGP verification"
+
+# BGP session established
+if docker exec "$NET_NODE" vtysh -c "show bgp summary" 2>/dev/null | grep -q "Estab"; then
+    ok "BGP session established on net-node"
+else
+    fail "BGP session not established on net-node"
+    errors=$((errors + 1))
+fi
+
+# Routes announced on net-node
+if docker exec "$NET_NODE" vtysh -c "show ip route" 2>/dev/null | grep -q "${TENANT_A_API_PUBLIC_IP}"; then
+    ok "API PublicIP route (${TENANT_A_API_PUBLIC_IP}/32) present on net-node"
+else
+    fail "API PublicIP route (${TENANT_A_API_PUBLIC_IP}/32) missing on net-node"
+    errors=$((errors + 1))
+fi
+
+if docker exec "$NET_NODE" vtysh -c "show ip route" 2>/dev/null | grep -q "${TENANT_A_INGRESS_PUBLIC_IP}"; then
+    ok "Ingress PublicIP route (${TENANT_A_INGRESS_PUBLIC_IP}/32) present on net-node"
+else
+    fail "Ingress PublicIP route (${TENANT_A_INGRESS_PUBLIC_IP}/32) missing on net-node"
+    errors=$((errors + 1))
+fi
+
+# Routes received on upstream router
+if docker exec "$UPSTREAM_ROUTER" vtysh -c "show ip route" 2>/dev/null | grep -q "${TENANT_A_API_PUBLIC_IP}"; then
+    ok "API PublicIP route (${TENANT_A_API_PUBLIC_IP}/32) received on upstream-router"
+else
+    fail "API PublicIP route (${TENANT_A_API_PUBLIC_IP}/32) not received on upstream-router"
+    errors=$((errors + 1))
+fi
+
+if docker exec "$UPSTREAM_ROUTER" vtysh -c "show ip route" 2>/dev/null | grep -q "${TENANT_A_INGRESS_PUBLIC_IP}"; then
+    ok "Ingress PublicIP route (${TENANT_A_INGRESS_PUBLIC_IP}/32) received on upstream-router"
+else
+    fail "Ingress PublicIP route (${TENANT_A_INGRESS_PUBLIC_IP}/32) not received on upstream-router"
+    errors=$((errors + 1))
+fi
+
+# ---------------------------------------------------------------
+# PHASE 8: Idempotency — re-run tenant-a creates
+# ---------------------------------------------------------------
+echo ""
+echo ">>> PHASE 8: Idempotency — re-run tenant-a creates"
 
 run_playbook "Allocate VLAN (idempotent)" \
     -e ipam_state_file="${IPAM_STATE_FILE}" \
@@ -514,11 +577,26 @@ run_playbook "Create DNAT API (idempotent)" \
     -e dnat_protocol=tcp \
     "${EXTERNAL_ACCESS_PLAYBOOKS}/l3_create_dnat.yaml"
 
+run_playbook "Announce API PublicIP route (idempotent)" \
+    -e bgp_public_ip="${TENANT_A_API_PUBLIC_IP}" \
+    -e bgp_next_hop="${TENANT_A_EXTERNAL_GATEWAY}" \
+    "${EXTERNAL_ACCESS_PLAYBOOKS}/bgp_announce.yaml"
+
 # ---------------------------------------------------------------
-# PHASE 8: external_access — Delete (tenant-a)
+# PHASE 9: external_access — Delete (tenant-a)
 # ---------------------------------------------------------------
 echo ""
-echo ">>> PHASE 8: external_access — Delete (tenant-a)"
+echo ">>> PHASE 9: external_access — Delete (tenant-a)"
+
+run_playbook "Withdraw API PublicIP route (tenant-a)" \
+    -e bgp_public_ip="${TENANT_A_API_PUBLIC_IP}" \
+    -e bgp_next_hop="${TENANT_A_EXTERNAL_GATEWAY}" \
+    "${EXTERNAL_ACCESS_PLAYBOOKS}/bgp_withdraw.yaml"
+
+run_playbook "Withdraw ingress PublicIP route (tenant-a)" \
+    -e bgp_public_ip="${TENANT_A_INGRESS_PUBLIC_IP}" \
+    -e bgp_next_hop="${TENANT_A_EXTERNAL_GATEWAY}" \
+    "${EXTERNAL_ACCESS_PLAYBOOKS}/bgp_withdraw.yaml"
 
 run_playbook "Delete DNAT — API (tenant-a)" \
     -e dnat_router_name="${TENANT_A}" \
@@ -562,10 +640,32 @@ TENANT_A_API_PUBLIC_IP=""
 TENANT_A_INGRESS_PUBLIC_IP=""
 
 # ---------------------------------------------------------------
-# PHASE 9: cluster_infra — Delete (both tenants)
+# PHASE 10: BGP withdrawal verification
 # ---------------------------------------------------------------
 echo ""
-echo ">>> PHASE 9: cluster_infra — Delete (both tenants)"
+echo ">>> PHASE 10: BGP withdrawal verification"
+
+sleep 5
+
+if ! docker exec "$UPSTREAM_ROUTER" vtysh -c "show ip route" 2>/dev/null | grep -q "${TENANT_A_API_PUBLIC_IP}"; then
+    ok "API PublicIP route (${TENANT_A_API_PUBLIC_IP}/32) withdrawn from upstream-router"
+else
+    fail "API PublicIP route (${TENANT_A_API_PUBLIC_IP}/32) still present on upstream-router after withdraw"
+    errors=$((errors + 1))
+fi
+
+if ! docker exec "$UPSTREAM_ROUTER" vtysh -c "show ip route" 2>/dev/null | grep -q "${TENANT_A_INGRESS_PUBLIC_IP}"; then
+    ok "Ingress PublicIP route (${TENANT_A_INGRESS_PUBLIC_IP}/32) withdrawn from upstream-router"
+else
+    fail "Ingress PublicIP route (${TENANT_A_INGRESS_PUBLIC_IP}/32) still present on upstream-router after withdraw"
+    errors=$((errors + 1))
+fi
+
+# ---------------------------------------------------------------
+# PHASE 11: cluster_infra — Delete (both tenants)
+# ---------------------------------------------------------------
+echo ""
+echo ">>> PHASE 11: cluster_infra — Delete (both tenants)"
 
 # Tenant-a
 run_playbook "Delete SNAT (tenant-a)" \
