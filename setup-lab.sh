@@ -21,6 +21,13 @@ CONTAINERLAB="/home/ybettan/go/bin/containerlab"
 
 SWITCHES=("${PREFIX}-leaf-1" "${PREFIX}-leaf-2")
 NET_NODE="${PREFIX}-net-node"
+UPSTREAM_ROUTER="${PREFIX}-upstream-router"
+
+# BGP peering link (net-node:eth2 <-> upstream-router:eth1)
+BGP_NET_NODE_IP="10.253.0.1/30"
+BGP_UPSTREAM_IP="10.253.0.2/30"
+BGP_NET_NODE_AS=65001
+BGP_UPSTREAM_AS=65000
 
 # Ansible paths
 OSAC_AAP_DIR="${OSAC_AAP_DIR:-${SCRIPT_DIR}/osac-aap}"
@@ -106,11 +113,54 @@ ansible-playbook \
 # ---------- step 5: install packages on network node ----------
 
 info "Preparing network node..."
-docker exec "$NET_NODE" apk add --no-cache iptables iproute2 python3 openssh >/dev/null 2>&1
+docker exec "$NET_NODE" apk add --no-cache iptables iproute2 python3 openssh frr >/dev/null 2>&1
 docker exec "$NET_NODE" ssh-keygen -A >/dev/null 2>&1
 docker exec "$NET_NODE" sh -c "echo 'root:root' | chpasswd"
 docker exec "$NET_NODE" sh -c "echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config"
 docker exec "$NET_NODE" /usr/sbin/sshd
-echo "  Installed iptables + iproute2 + python3 + openssh (sshd running)"
+echo "  Installed iptables, iproute2, python3, openssh (sshd running), frr"
+
+# ---------- step 6: configure BGP peering ----------
+
+info "Configuring BGP peering link..."
+docker exec "$NET_NODE" ip addr replace "$BGP_NET_NODE_IP" dev eth2
+docker exec "$NET_NODE" ip link set eth2 up
+docker exec "$UPSTREAM_ROUTER" ip addr replace "$BGP_UPSTREAM_IP" dev eth1
+docker exec "$UPSTREAM_ROUTER" ip link set eth1 up
+echo "  net-node:eth2 = ${BGP_NET_NODE_IP}, upstream-router:eth1 = ${BGP_UPSTREAM_IP}"
+
+info "Configuring FRR on net-node (AS ${BGP_NET_NODE_AS})..."
+docker exec "$NET_NODE" sh -c "cat > /etc/frr/frr.conf <<EOF
+frr defaults traditional
+hostname net-node
+log syslog informational
+
+router bgp ${BGP_NET_NODE_AS}
+ bgp router-id ${BGP_NET_NODE_IP%/*}
+ neighbor ${BGP_UPSTREAM_IP%/*} remote-as ${BGP_UPSTREAM_AS}
+ address-family ipv4 unicast
+  redistribute static
+ exit-address-family
+EOF"
+docker exec "$NET_NODE" sh -c "sed -i 's/bgpd=no/bgpd=yes/' /etc/frr/daemons"
+docker exec "$NET_NODE" sh -c "/usr/lib/frr/frrinit.sh start" 2>/dev/null || true
+
+info "Configuring FRR on upstream-router (AS ${BGP_UPSTREAM_AS})..."
+docker exec "$UPSTREAM_ROUTER" sh -c "cat > /etc/frr/frr.conf <<EOF
+frr defaults traditional
+hostname upstream-router
+log syslog informational
+
+router bgp ${BGP_UPSTREAM_AS}
+ bgp router-id ${BGP_UPSTREAM_IP%/*}
+ neighbor ${BGP_NET_NODE_IP%/*} remote-as ${BGP_NET_NODE_AS}
+ address-family ipv4 unicast
+ exit-address-family
+EOF"
+docker exec "$UPSTREAM_ROUTER" sh -c "pkill -HUP bgpd" 2>/dev/null || \
+    docker exec "$UPSTREAM_ROUTER" sh -c "/usr/lib/frr/frrinit.sh restart" 2>/dev/null || true
+
+info "Waiting for BGP session to establish (10s)..."
+sleep 10
 
 info "Admin setup complete. Run ./test-steps.sh to test."

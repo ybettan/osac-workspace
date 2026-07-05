@@ -39,6 +39,12 @@ topology:
       kind: linux
       mgmt-ipv4: 172.20.20.30
 
+    # Upstream router (simulates DC edge, eBGP peer for net-node)
+    upstream-router:
+      kind: linux
+      image: frrouting/frr:latest
+      mgmt-ipv4: 172.20.20.40
+
   links:
     # Leaf-1 <-> Leaf-2 trunk (carries all VLANs between switches)
     - endpoints: ["leaf-1:swp1", "leaf-2:swp1"]
@@ -50,3 +56,6 @@ topology:
     # Leaf-2 <-> hosts
     - endpoints: ["leaf-2:swp2", "host-2:eth1"]
     - endpoints: ["leaf-2:swp3", "host-3:eth1"]
+
+    # Net-node <-> upstream router (eBGP peering link)
+    - endpoints: ["net-node:eth2", "upstream-router:eth1"]
