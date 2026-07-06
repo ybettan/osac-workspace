@@ -495,7 +495,7 @@ echo ""
 echo ">>> PHASE 7: BGP verification"
 
 # BGP session established
-if docker exec "$NET_NODE" vtysh -c "show bgp summary" 2>/dev/null | grep -q "Estab"; then
+if docker exec "$NET_NODE" vtysh -c "show bgp summary" 2>/dev/null | grep -qE "10\.253\.0\.2.*[0-9]{2}:[0-9]{2}:[0-9]{2}"; then
     ok "BGP session established on net-node"
 else
     fail "BGP session not established on net-node"

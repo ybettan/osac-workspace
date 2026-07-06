@@ -137,6 +137,7 @@ log syslog informational
 
 router bgp ${BGP_NET_NODE_AS}
  bgp router-id ${BGP_NET_NODE_IP%/*}
+ no bgp ebgp-requires-policy
  neighbor ${BGP_UPSTREAM_IP%/*} remote-as ${BGP_UPSTREAM_AS}
  address-family ipv4 unicast
   redistribute static
@@ -157,6 +158,7 @@ log syslog informational
 
 router bgp ${BGP_UPSTREAM_AS}
  bgp router-id ${BGP_UPSTREAM_IP%/*}
+ no bgp ebgp-requires-policy
  neighbor ${BGP_NET_NODE_IP%/*} remote-as ${BGP_NET_NODE_AS}
  address-family ipv4 unicast
  exit-address-family
