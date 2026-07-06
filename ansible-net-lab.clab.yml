@@ -42,7 +42,6 @@ topology:
     # Upstream router (simulates DC edge, eBGP peer for net-node)
     upstream-router:
       kind: linux
-      image: frrouting/frr:latest
       mgmt-ipv4: 172.20.20.40
 
   links:

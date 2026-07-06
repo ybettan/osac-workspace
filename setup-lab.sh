@@ -145,6 +145,10 @@ EOF"
 docker exec "$NET_NODE" sh -c "sed -i 's/bgpd=no/bgpd=yes/' /etc/frr/daemons"
 docker exec "$NET_NODE" sh -c "/usr/lib/frr/frrinit.sh start" 2>/dev/null || true
 
+info "Preparing upstream router..."
+docker exec "$UPSTREAM_ROUTER" apk add --no-cache frr >/dev/null 2>&1
+echo "  Installed frr on upstream-router"
+
 info "Configuring FRR on upstream-router (AS ${BGP_UPSTREAM_AS})..."
 docker exec "$UPSTREAM_ROUTER" sh -c "cat > /etc/frr/frr.conf <<EOF
 frr defaults traditional
@@ -157,8 +161,8 @@ router bgp ${BGP_UPSTREAM_AS}
  address-family ipv4 unicast
  exit-address-family
 EOF"
-docker exec "$UPSTREAM_ROUTER" sh -c "pkill -HUP bgpd" 2>/dev/null || \
-    docker exec "$UPSTREAM_ROUTER" sh -c "/usr/lib/frr/frrinit.sh restart" 2>/dev/null || true
+docker exec "$UPSTREAM_ROUTER" sh -c "sed -i 's/bgpd=no/bgpd=yes/' /etc/frr/daemons"
+docker exec "$UPSTREAM_ROUTER" sh -c "/usr/lib/frr/frrinit.sh start" 2>/dev/null || true
 
 info "Waiting for BGP session to establish (10s)..."
 sleep 10
