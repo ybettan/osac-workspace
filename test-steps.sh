@@ -502,6 +502,10 @@ else
     errors=$((errors + 1))
 fi
 
+# Wait for BGP route propagation
+info "Waiting for BGP route propagation (5s)..."
+sleep 5
+
 # Routes announced on net-node
 if docker exec "$NET_NODE" vtysh -c "show ip route" 2>/dev/null | grep -q "${TENANT_A_API_PUBLIC_IP}"; then
     ok "API PublicIP route (${TENANT_A_API_PUBLIC_IP}/32) present on net-node"
