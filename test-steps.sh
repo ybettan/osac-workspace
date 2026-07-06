@@ -78,6 +78,7 @@ compute_veth_addresses() {
     EXTERNAL_PEER_IP="10.254.0.$((veth_index + 1))/30"
     EXTERNAL_ROUTER_IP="10.254.0.$((veth_index + 2))/30"
     EXTERNAL_GATEWAY="10.254.0.$((veth_index + 1))"
+    EXTERNAL_NS_IP="10.254.0.$((veth_index + 2))"
     EXTERNAL_SUBNET=$(python3 -c "import ipaddress; print(ipaddress.ip_interface('${EXTERNAL_PEER_IP}').network)")
     SNAT_VETH_NS="v$(echo -n "$2" | md5sum | cut -c1-11)i"
 }
@@ -92,7 +93,7 @@ cleanup() {
     if [ -n "${TENANT_A_API_PUBLIC_IP:-}" ]; then
         run_playbook "Cleanup: Withdraw API route" \
             -e bgp_public_ip="${TENANT_A_API_PUBLIC_IP}" \
-            -e bgp_next_hop="${TENANT_A_EXTERNAL_GATEWAY:-0.0.0.0}" \
+            -e bgp_next_hop="${TENANT_A_EXTERNAL_NS_IP:-0.0.0.0}" \
             "${EXTERNAL_ACCESS_PLAYBOOKS}/bgp_withdraw.yaml" 2>/dev/null || true
         run_playbook "Cleanup: Delete DNAT (API)" \
             -e dnat_router_name="${TENANT_A}" \
@@ -111,7 +112,7 @@ cleanup() {
     if [ -n "${TENANT_A_INGRESS_PUBLIC_IP:-}" ]; then
         run_playbook "Cleanup: Withdraw ingress route" \
             -e bgp_public_ip="${TENANT_A_INGRESS_PUBLIC_IP}" \
-            -e bgp_next_hop="${TENANT_A_EXTERNAL_GATEWAY:-0.0.0.0}" \
+            -e bgp_next_hop="${TENANT_A_EXTERNAL_NS_IP:-0.0.0.0}" \
             "${EXTERNAL_ACCESS_PLAYBOOKS}/bgp_withdraw.yaml" 2>/dev/null || true
         run_playbook "Cleanup: Delete DNAT (ingress HTTP)" \
             -e dnat_router_name="${TENANT_A}" \
@@ -224,6 +225,7 @@ compute_veth_addresses "${VLAN_A}" "${TENANT_A}"
 TENANT_A_EXTERNAL_PEER_IP="${EXTERNAL_PEER_IP}"
 TENANT_A_EXTERNAL_ROUTER_IP="${EXTERNAL_ROUTER_IP}"
 TENANT_A_EXTERNAL_GATEWAY="${EXTERNAL_GATEWAY}"
+TENANT_A_EXTERNAL_NS_IP="${EXTERNAL_NS_IP}"
 TENANT_A_EXTERNAL_SUBNET="${EXTERNAL_SUBNET}"
 TENANT_A_SNAT_VETH_NS="${SNAT_VETH_NS}"
 
@@ -368,12 +370,12 @@ run_playbook "Create DNAT — ingress HTTPS (tenant-a)" \
 
 run_playbook "Announce API PublicIP route (tenant-a)" \
     -e bgp_public_ip="${TENANT_A_API_PUBLIC_IP}" \
-    -e bgp_next_hop="${TENANT_A_EXTERNAL_GATEWAY}" \
+    -e bgp_next_hop="${TENANT_A_EXTERNAL_NS_IP}" \
     "${EXTERNAL_ACCESS_PLAYBOOKS}/bgp_announce.yaml"
 
 run_playbook "Announce ingress PublicIP route (tenant-a)" \
     -e bgp_public_ip="${TENANT_A_INGRESS_PUBLIC_IP}" \
-    -e bgp_next_hop="${TENANT_A_EXTERNAL_GATEWAY}" \
+    -e bgp_next_hop="${TENANT_A_EXTERNAL_NS_IP}" \
     "${EXTERNAL_ACCESS_PLAYBOOKS}/bgp_announce.yaml"
 
 # ---------------------------------------------------------------
@@ -583,7 +585,7 @@ run_playbook "Create DNAT API (idempotent)" \
 
 run_playbook "Announce API PublicIP route (idempotent)" \
     -e bgp_public_ip="${TENANT_A_API_PUBLIC_IP}" \
-    -e bgp_next_hop="${TENANT_A_EXTERNAL_GATEWAY}" \
+    -e bgp_next_hop="${TENANT_A_EXTERNAL_NS_IP}" \
     "${EXTERNAL_ACCESS_PLAYBOOKS}/bgp_announce.yaml"
 
 # ---------------------------------------------------------------
@@ -594,12 +596,12 @@ echo ">>> PHASE 9: external_access — Delete (tenant-a)"
 
 run_playbook "Withdraw API PublicIP route (tenant-a)" \
     -e bgp_public_ip="${TENANT_A_API_PUBLIC_IP}" \
-    -e bgp_next_hop="${TENANT_A_EXTERNAL_GATEWAY}" \
+    -e bgp_next_hop="${TENANT_A_EXTERNAL_NS_IP}" \
     "${EXTERNAL_ACCESS_PLAYBOOKS}/bgp_withdraw.yaml"
 
 run_playbook "Withdraw ingress PublicIP route (tenant-a)" \
     -e bgp_public_ip="${TENANT_A_INGRESS_PUBLIC_IP}" \
-    -e bgp_next_hop="${TENANT_A_EXTERNAL_GATEWAY}" \
+    -e bgp_next_hop="${TENANT_A_EXTERNAL_NS_IP}" \
     "${EXTERNAL_ACCESS_PLAYBOOKS}/bgp_withdraw.yaml"
 
 run_playbook "Delete DNAT — API (tenant-a)" \
@@ -639,10 +641,6 @@ run_playbook "Release public IP — ingress (tenant-a)" \
     -e ipam_purpose="${TENANT_A}-ingress" \
     "${EXTERNAL_ACCESS_PLAYBOOKS}/ipam_release_ip.yaml"
 
-# Clear external_access IPs so cleanup trap doesn't re-delete
-TENANT_A_API_PUBLIC_IP=""
-TENANT_A_INGRESS_PUBLIC_IP=""
-
 # ---------------------------------------------------------------
 # PHASE 10: BGP withdrawal verification
 # ---------------------------------------------------------------
@@ -664,6 +662,10 @@ else
     fail "Ingress PublicIP route (${TENANT_A_INGRESS_PUBLIC_IP}/32) still present on upstream-router after withdraw"
     errors=$((errors + 1))
 fi
+
+# Clear external_access IPs so cleanup trap doesn't re-delete
+TENANT_A_API_PUBLIC_IP=""
+TENANT_A_INGRESS_PUBLIC_IP=""
 
 # ---------------------------------------------------------------
 # PHASE 11: cluster_infra — Delete (both tenants)
