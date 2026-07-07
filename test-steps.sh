@@ -496,17 +496,17 @@ fi
 echo ""
 echo ">>> PHASE 7: BGP verification"
 
+# Wait for BGP session establishment and route propagation
+info "Waiting for BGP session and route propagation (5s)..."
+sleep 5
+
 # BGP session established
-if docker exec "$NET_NODE" vtysh -c "show bgp summary" 2>/dev/null | grep -qE "10\.253\.0\.2.*[0-9]{2}:[0-9]{2}:[0-9]{2}"; then
+if docker exec "$NET_NODE" vtysh -c "show bgp summary" 2>/dev/null | grep -qE "10\.253\.0\.2.*([0-9]{2}:[0-9]{2}:[0-9]{2}|[0-9]+d[0-9]{2}h[0-9]{2}m)"; then
     ok "BGP session established on net-node"
 else
     fail "BGP session not established on net-node"
     errors=$((errors + 1))
 fi
-
-# Wait for BGP route propagation
-info "Waiting for BGP route propagation (5s)..."
-sleep 5
 
 # Routes announced on net-node
 if docker exec "$NET_NODE" vtysh -c "show ip route" 2>/dev/null | grep -q "${TENANT_A_API_PUBLIC_IP}"; then
