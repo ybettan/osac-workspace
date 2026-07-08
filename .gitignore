@@ -87,6 +87,9 @@ docs/pr-dashboard/data.json
 .artifacts/prd/*
 !.artifacts/prd/config.json
 
+# Containerlab generated state
+clab-*/
+
 # AI Tooling
 .cursor/
 .gemini/
