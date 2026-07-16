@@ -23,6 +23,15 @@ SWITCHES=("${PREFIX}-leaf-1" "${PREFIX}-leaf-2")
 NET_NODE="${PREFIX}-net-node"
 UPSTREAM_ROUTER="${PREFIX}-upstream-router"
 
+# Host VMs
+VM_DIR="/var/lib/libvirt/images/${LAB_NAME}"
+VM_VCPUS=4
+VM_MEMORY=16384   # MB
+VM_DISK_SIZE=100  # GB
+HOST_VMS=("host-1" "host-2" "host-3")
+HOST_BRIDGES=("br-host1" "br-host2" "br-host3")
+HOST_VETHS=("leaf1-swp2" "leaf2-swp2" "leaf2-swp3")
+
 # BGP peering link (net-node:eth2 <-> upstream-router:eth1)
 BGP_NET_NODE_IP="10.253.0.1/30"
 BGP_UPSTREAM_IP="10.253.0.2/30"
@@ -43,7 +52,31 @@ info()  { echo "==> $*"; }
 
 if [ "${1:-}" = "destroy" ]; then
     info "Destroying lab..."
+
+    # Destroy host VMs
+    for vm in "${HOST_VMS[@]}"; do
+        if virsh dominfo "$vm" &>/dev/null; then
+            virsh destroy "$vm" 2>/dev/null || true
+            virsh undefine "$vm" --remove-all-storage 2>/dev/null || true
+            info "  Removed VM $vm"
+        fi
+    done
+
+    # Remove bridges
+    for br in "${HOST_BRIDGES[@]}"; do
+        if ip link show "$br" &>/dev/null; then
+            sudo ip link set "$br" down 2>/dev/null || true
+            sudo ip link delete "$br" 2>/dev/null || true
+            info "  Removed bridge $br"
+        fi
+    done
+
+    # Destroy containerlab
     sudo ${CONTAINERLAB} destroy -t "$TOPO_FILE" --cleanup
+
+    # Clean up VM disks
+    rm -rf "$VM_DIR"
+
     info "Done."
     exit 0
 fi
@@ -160,4 +193,71 @@ docker exec "$UPSTREAM_ROUTER" sh -c "/usr/lib/frr/frrinit.sh start" 2>/dev/null
 info "Waiting for BGP session to establish (10s)..."
 sleep 10
 
-info "Admin setup complete. Run ./test-e2e.sh to test."
+# ============================================================
+# VM SETUP (host VMs)
+# ============================================================
+
+# ---------- step 8: create Linux bridges for host VMs ----------
+
+info "Creating Linux bridges for host VMs..."
+for i in "${!HOST_BRIDGES[@]}"; do
+    br="${HOST_BRIDGES[$i]}"
+    veth="${HOST_VETHS[$i]}"
+    if ip link show "$br" &>/dev/null; then
+        echo "  Bridge $br already exists — skipping"
+    else
+        sudo ip link add "$br" type bridge
+        sudo ip link set "$veth" master "$br"
+        sudo ip link set "$br" up
+        echo "  Created $br with $veth attached"
+    fi
+done
+
+# ---------- step 9: find containerlab management bridge ----------
+
+CLAB_MGMT_BRIDGE=$(docker network inspect clab -f '{{range .Options}}{{.}}{{end}}' 2>/dev/null | grep -oP 'br-[a-f0-9]+' || \
+    docker network inspect clab -f '{{index .Options "com.docker.network.bridge.name"}}' 2>/dev/null || true)
+if [ -z "$CLAB_MGMT_BRIDGE" ]; then
+    CLAB_MGMT_BRIDGE="br-$(docker network inspect clab -f '{{.Id}}' | cut -c1-12)"
+fi
+
+if [ -z "$CLAB_MGMT_BRIDGE" ]; then
+    echo "ERROR: Could not find containerlab management bridge" >&2
+    exit 1
+fi
+info "Containerlab management bridge: $CLAB_MGMT_BRIDGE"
+
+# ---------- step 10: create host KVM VMs (powered off) ----------
+
+mkdir -p "$VM_DIR"
+
+info "Creating host KVM VMs..."
+for i in "${!HOST_VMS[@]}"; do
+    vm="${HOST_VMS[$i]}"
+    br="${HOST_BRIDGES[$i]}"
+
+    if virsh dominfo "$vm" &>/dev/null; then
+        echo "  VM $vm already defined — skipping"
+        continue
+    fi
+
+    disk="$VM_DIR/${vm}.qcow2"
+    qemu-img create -f qcow2 "$disk" "${VM_DISK_SIZE}G" >/dev/null 2>&1
+
+    virt-install \
+        --name "$vm" \
+        --vcpus "$VM_VCPUS" \
+        --memory "$VM_MEMORY" \
+        --disk "$disk,format=qcow2" \
+        --network "bridge=$br" \
+        --osinfo detect=on,name=generic \
+        --boot hd \
+        --noautoconsole \
+        --noreboot \
+        --import >/dev/null 2>&1
+
+    virsh destroy "$vm" 2>/dev/null || true
+    echo "  Defined $vm (powered off): ${VM_VCPUS} vCPU, ${VM_MEMORY}MB RAM, ${VM_DISK_SIZE}GB disk"
+done
+
+info "Lab setup complete."
