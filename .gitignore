@@ -65,6 +65,7 @@ osac-ui/
 enhancement-proposals/
 bare-metal-fulfillment-operator/
 host-management-openstack/
+cluster-tool/
 
 # Bootstrap-managed reference repos (cloned read-only, no fork remote)
 osac-ux/

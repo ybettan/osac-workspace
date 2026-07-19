@@ -23,6 +23,12 @@ SWITCHES=("${PREFIX}-leaf-1" "${PREFIX}-leaf-2")
 NET_NODE="${PREFIX}-net-node"
 UPSTREAM_ROUTER="${PREFIX}-upstream-router"
 
+# mgmt-server
+MGMT_CLONE_NAME="agentless-lab-mgmt"
+MGMT_IMAGE="${MGMT_IMAGE:-quay.io/osac-project/cluster-flavors:caas}"
+INSTALLER_DIR="${SCRIPT_DIR}/osac-installer"
+PULL_SECRET="${INSTALLER_DIR}/values/agentless-net-lab/pull-secret.json"
+
 # Host VMs
 VM_DIR="/var/lib/libvirt/images/${LAB_NAME}"
 VM_VCPUS=4
@@ -53,6 +59,12 @@ info()  { echo "==> $*"; }
 if [ "${1:-}" = "destroy" ]; then
     info "Destroying lab..."
 
+    # Destroy mgmt-server
+    if command -v cluster-tool &>/dev/null; then
+        cluster-tool destroy "$MGMT_CLONE_NAME" 2>/dev/null || true
+        info "  Removed mgmt-server"
+    fi
+
     # Destroy host VMs
     for vm in "${HOST_VMS[@]}"; do
         if virsh dominfo "$vm" &>/dev/null; then
@@ -76,6 +88,10 @@ if [ "${1:-}" = "destroy" ]; then
 
     # Clean up VM disks
     rm -rf "$VM_DIR"
+
+    # Remove iptables FORWARD rules
+    iptables -D FORWARD -s 192.168.0.0/16 -j ACCEPT 2>/dev/null || true
+    iptables -D FORWARD -d 192.168.0.0/16 -j ACCEPT 2>/dev/null || true
 
     info "Done."
     exit 0
@@ -259,5 +275,158 @@ for i in "${!HOST_VMS[@]}"; do
     virsh destroy "$vm" 2>/dev/null || true
     echo "  Defined $vm (powered off): ${VM_VCPUS} vCPU, ${VM_MEMORY}MB RAM, ${VM_DISK_SIZE}GB disk"
 done
+
+# ============================================================
+# MGMT-SERVER (OpenShift SNO from snapshot via cluster-tool)
+# ============================================================
+
+# Docker (used by containerlab) sets the iptables FORWARD chain policy to DROP.
+# Libvirt (used by cluster-tool) creates NAT rules in nftables, but iptables
+# and nftables are evaluated independently — Docker's DROP overrides libvirt's
+# nftables ACCEPT, leaving VMs with no internet access.
+if iptables -S FORWARD 2>/dev/null | grep -q "\-P FORWARD DROP"; then
+    if ! iptables -C FORWARD -s 192.168.0.0/16 -j ACCEPT 2>/dev/null; then
+        info "Adding iptables FORWARD rules for libvirt VMs..."
+        iptables -I FORWARD -s 192.168.0.0/16 -j ACCEPT
+        iptables -I FORWARD -d 192.168.0.0/16 -j ACCEPT
+    fi
+fi
+
+# ---------- step 11: setup cluster-tool (one-time) ----------
+
+if ! cluster-tool servers 2>/dev/null | grep -q "local"; then
+    info "Setting up cluster-tool..."
+    cluster-tool connect local --host local --data-path /var/lib/cluster-tool
+    sudo cluster-tool setup client
+fi
+
+# ---------- step 12: pull snapshot flavor ----------
+
+if cluster-tool flavors 2>/dev/null | grep -q "caas"; then
+    info "Snapshot flavor 'caas' already pulled — skipping"
+else
+    info "Pulling mgmt-server snapshot..."
+    cluster-tool pull "$MGMT_IMAGE"
+fi
+
+# ---------- step 13: boot mgmt-server ----------
+
+MGMT_VM_NAME="test-infra-cluster-${MGMT_CLONE_NAME}-master-0"
+
+if virsh dominfo "$MGMT_VM_NAME" &>/dev/null; then
+    info "mgmt-server already running — skipping boot"
+else
+    info "Booting mgmt-server (this may take several minutes)..."
+    cluster-tool boot --flavor caas --name "$MGMT_CLONE_NAME" --pull-secret "$PULL_SECRET"
+fi
+
+# ---------- step 14: attach mgmt-server to containerlab bridge ----------
+
+if virsh domiflist "$MGMT_VM_NAME" 2>/dev/null | grep -q "$CLAB_MGMT_BRIDGE"; then
+    info "mgmt-server already attached to $CLAB_MGMT_BRIDGE — skipping"
+else
+    info "Attaching mgmt-server to containerlab management bridge..."
+    virsh attach-interface "$MGMT_VM_NAME" bridge "$CLAB_MGMT_BRIDGE" --model virtio --live --persistent
+fi
+
+KUBECONFIG_PATH="$HOME/.kube/${MGMT_CLONE_NAME}.kubeconfig"
+export KUBECONFIG="$KUBECONFIG_PATH"
+OSAC_NS="osac-e2e-ci"
+MGMT_LIBVIRT_NET="test-infra-net-${MGMT_CLONE_NAME}"
+
+# ---------- step 14b: fix DNS forwarding for hosted clusters ----------
+#
+# cluster-tool creates the libvirt network with localOnly='yes' on the mgmt
+# cluster's domain. This prevents the libvirt dnsmasq from forwarding DNS
+# queries for subdomains (like hosted.*) to upstream resolvers. Worker VMs
+# that use this dnsmasq cannot resolve guest cluster API hostnames created
+# in Route 53. Flip to localOnly='no' so unknown subdomains are forwarded.
+
+DNSMASQ_CONF="/var/lib/libvirt/dnsmasq/${MGMT_LIBVIRT_NET}.conf"
+if virsh net-dumpxml "$MGMT_LIBVIRT_NET" 2>/dev/null | grep -q "localOnly='yes'"; then
+    info "Fixing DNS forwarding on ${MGMT_LIBVIRT_NET}..."
+    # Update the persistent libvirt network definition
+    NET_XML=$(mktemp)
+    virsh net-dumpxml "$MGMT_LIBVIRT_NET" > "$NET_XML"
+    sed -i "s/localOnly='yes'/localOnly='no'/" "$NET_XML"
+    virsh net-define "$NET_XML"
+    rm -f "$NET_XML"
+    # Patch the live dnsmasq config and restart the process (SIGHUP doesn't
+    # reload the local=/ directive). The bridge stays up so VMs keep connectivity.
+    sed -i '/^local=/d' "$DNSMASQ_CONF"
+    DNSMASQ_PID=$(cat /var/run/libvirt/network/${MGMT_LIBVIRT_NET}.pid 2>/dev/null)
+    if [ -n "$DNSMASQ_PID" ]; then
+        kill "$DNSMASQ_PID" 2>/dev/null; sleep 1
+        DNSMASQ_BRIDGE=$(virsh net-info "$MGMT_LIBVIRT_NET" 2>/dev/null | awk '/^Bridge:/{print $2}')
+        DNSMASQ_INTERFACE="$DNSMASQ_BRIDGE" /usr/sbin/dnsmasq \
+            --conf-file="$DNSMASQ_CONF" --leasefile-ro \
+            --dhcp-script=/usr/libexec/libvirt_leaseshelper
+        pgrep -f "dnsmasq.*${MGMT_LIBVIRT_NET}" > "/var/run/libvirt/network/${MGMT_LIBVIRT_NET}.pid"
+    fi
+else
+    info "DNS forwarding already fixed — skipping"
+fi
+
+# ============================================================
+# OSAC REFRESH (bring snapshot cluster back to life)
+# ============================================================
+
+# ---------- step 15: init osac-installer submodules ----------
+
+if [ -d "$INSTALLER_DIR/base/osac-operator/.git" ]; then
+    info "osac-installer submodules already initialized — skipping"
+else
+    info "Initializing osac-installer submodules..."
+    git -C "$INSTALLER_DIR" submodule update --init --recursive
+fi
+
+# ---------- step 16: create agentless-net inventory ConfigMap ----------
+
+info "Creating agentless-net inventory ConfigMap..."
+KUBECONFIG="$KUBECONFIG" oc create configmap agentless-net-inventory \
+    --from-file=inventory.yml="${SCRIPT_DIR}/ansible/inventory.yml" \
+    -n "$OSAC_NS" \
+    --dry-run=client -o yaml | \
+    KUBECONFIG="$KUBECONFIG" oc apply -f -
+
+# ---------- step 17: refresh OSAC ----------
+
+if KUBECONFIG="$KUBECONFIG" oc get deploy/fulfillment-grpc-server -n "$OSAC_NS" 2>/dev/null | grep -q "1/1"; then
+    info "OSAC already running — skipping refresh"
+else
+    info "Refreshing OSAC (this may take several minutes)..."
+    (cd "$INSTALLER_DIR" && \
+        KUBECONFIG="$KUBECONFIG" \
+        VALUES_FILE=values/agentless-net-lab/values.yaml \
+        INSTALLER_NAMESPACE="$OSAC_NS" \
+        python3 scripts/refresh-after-snapshot.py)
+fi
+
+# ---------- step 17b: patch DNS credentials ----------
+
+DNS_CREDS="${HOME}/.config/osac/aws-dns-credentials"
+if [ -f "$DNS_CREDS" ]; then
+    info "Patching cluster-fulfillment-ig with DNS credentials..."
+    # shellcheck source=/dev/null
+    source "$DNS_CREDS"
+    KUBECONFIG="$KUBECONFIG" oc patch secret cluster-fulfillment-ig -n "$OSAC_NS" --type merge \
+        -p "{\"data\":{\"AWS_ACCESS_KEY_ID\":\"$(echo -n "$AWS_ACCESS_KEY_ID" | base64)\",\"AWS_SECRET_ACCESS_KEY\":\"$(echo -n "$AWS_SECRET_ACCESS_KEY" | base64)\"}}"
+else
+    echo "  WARN: ${DNS_CREDS} not found — DNS (Route 53) will not work."
+    echo "  Create the file with:"
+    echo "    AWS_ACCESS_KEY_ID=..."
+    echo "    AWS_SECRET_ACCESS_KEY=..."
+fi
+
+# ---------- step 17c: validate OSAC ----------
+
+info "Validating OSAC..."
+KUBECONFIG="$KUBECONFIG" oc wait deploy/fulfillment-grpc-server -n "$OSAC_NS" \
+    --for=condition=Available --timeout=60s
+KUBECONFIG="$KUBECONFIG" oc wait deploy/osac-operator -n "$OSAC_NS" \
+    --for=condition=Available --timeout=60s
+info "OSAC is running:"
+KUBECONFIG="$KUBECONFIG" oc get pods -n "$OSAC_NS" --no-headers | \
+    awk '{print $3}' | sort | uniq -c | sort -rn
 
 info "Lab setup complete."
