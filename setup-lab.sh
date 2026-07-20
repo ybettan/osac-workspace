@@ -38,6 +38,12 @@ HOST_VMS=("host-1" "host-2" "host-3")
 HOST_BRIDGES=("br-host1" "br-host2" "br-host3")
 HOST_VETHS=("leaf1-swp2" "leaf2-swp2" "leaf2-swp3")
 
+# Agent registration
+AGENT_RESOURCE_CLASS="ci-worker"
+AGENT_NAMESPACE="hardware-inventory"
+INFRAENV_NAME="agentless-net-discovery"
+SSH_PUB_KEY="$(cat ~/.ssh/id_rsa.pub 2>/dev/null || cat ~/.ssh/id_ed25519.pub 2>/dev/null || true)"
+
 # BGP peering link (net-node:eth2 <-> upstream-router:eth1)
 BGP_NET_NODE_IP="10.253.0.1/30"
 BGP_UPSTREAM_IP="10.253.0.2/30"
@@ -428,5 +434,150 @@ KUBECONFIG="$KUBECONFIG" oc wait deploy/osac-operator -n "$OSAC_NS" \
 info "OSAC is running:"
 KUBECONFIG="$KUBECONFIG" oc get pods -n "$OSAC_NS" --no-headers | \
     awk '{print $3}' | sort | uniq -c | sort -rn
+
+# ============================================================
+# AGENT SETUP (register host VMs as CaaS agents)
+# ============================================================
+
+# ---------- step 18: register host type in fulfillment-service ----------
+
+INTERNAL_API="https://$(KUBECONFIG="$KUBECONFIG" oc get route fulfillment-internal-api -n "$OSAC_NS" -o jsonpath='{.status.ingress[0].host}')"
+TOKEN=$(KUBECONFIG="$KUBECONFIG" oc create token -n "$OSAC_NS" admin)
+
+RESPONSE_BODY=$(mktemp)
+HTTP_CODE=$(curl -sk -w "%{http_code}" -X POST "${INTERNAL_API}/api/private/v1/host_types" \
+    -H "Authorization: Bearer ${TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d "{\"id\": \"${AGENT_RESOURCE_CLASS}\", \"title\": \"CI Worker\", \"description\": \"Worker nodes for CI testing\"}" \
+    -o "${RESPONSE_BODY}") || true
+if [[ "${HTTP_CODE}" == "200" || "${HTTP_CODE}" == "201" ]]; then
+    info "Host type '${AGENT_RESOURCE_CLASS}' created"
+elif [[ "${HTTP_CODE}" == "409" ]]; then
+    info "Host type '${AGENT_RESOURCE_CLASS}' already exists — skipping"
+else
+    echo "ERROR: Failed to create host type (HTTP ${HTTP_CODE})"
+    cat "${RESPONSE_BODY}"
+    rm -f "${RESPONSE_BODY}"
+    exit 1
+fi
+rm -f "${RESPONSE_BODY}"
+
+# ---------- step 19: create agent namespace and InfraEnv ----------
+
+info "Creating agent namespace '${AGENT_NAMESPACE}'..."
+KUBECONFIG="$KUBECONFIG" oc create namespace "$AGENT_NAMESPACE" --dry-run=client -o yaml | \
+    KUBECONFIG="$KUBECONFIG" oc apply -f -
+
+info "Creating pull-secret in ${AGENT_NAMESPACE}..."
+KUBECONFIG="$KUBECONFIG" oc create secret generic pull-secret \
+    -n "$AGENT_NAMESPACE" \
+    --from-file=.dockerconfigjson="$PULL_SECRET" \
+    --type=kubernetes.io/dockerconfigjson \
+    --dry-run=client -o yaml | \
+    KUBECONFIG="$KUBECONFIG" oc apply -f -
+
+info "Creating CAPI provider role in ${AGENT_NAMESPACE}..."
+export AGENT_NAMESPACE INFRAENV_NAME SSH_PUB_KEY
+envsubst < "${SCRIPT_DIR}/manifests/capi-provider-role.yaml" | KUBECONFIG="$KUBECONFIG" oc apply -f -
+
+info "Creating InfraEnv '${INFRAENV_NAME}' in ${AGENT_NAMESPACE}..."
+envsubst < "${SCRIPT_DIR}/manifests/infraenv.yaml" | KUBECONFIG="$KUBECONFIG" oc apply -f -
+
+info "Waiting for discovery ISO URL..."
+elapsed=0
+while true; do
+    ISO_URL=$(KUBECONFIG="$KUBECONFIG" oc get infraenv "$INFRAENV_NAME" -n "$AGENT_NAMESPACE" \
+        -o jsonpath='{.status.isoDownloadURL}' 2>/dev/null) || true
+    [ -n "$ISO_URL" ] && break
+    sleep 5; elapsed=$((elapsed + 5))
+    if [ "$elapsed" -ge 300 ]; then
+        echo "ERROR: Timed out waiting for ISO URL after ${elapsed}s"
+        KUBECONFIG="$KUBECONFIG" oc get infraenv "$INFRAENV_NAME" -n "$AGENT_NAMESPACE" -o yaml 2>&1 || true
+        exit 1
+    fi
+done
+info "Discovery ISO URL ready"
+
+# ---------- step 20: boot host VMs with discovery ISO ----------
+
+ISO_FILE="${VM_DIR}/discovery.iso"
+
+if [ -f "$ISO_FILE" ]; then
+    info "Discovery ISO already downloaded — skipping"
+else
+    info "Downloading discovery ISO..."
+    curl -k -L --fail-with-body -o "$ISO_FILE" "$ISO_URL"
+fi
+
+info "Booting host VMs with discovery ISO..."
+for vm in "${HOST_VMS[@]}"; do
+    if virsh domstate "$vm" 2>/dev/null | grep -q "running"; then
+        echo "  $vm already running — skipping"
+        continue
+    fi
+
+    # Attach mgmt-server libvirt network (DHCP + DNS + route to cluster)
+    if ! virsh domiflist "$vm" 2>/dev/null | grep -q "$MGMT_LIBVIRT_NET"; then
+        virsh attach-interface "$vm" network "$MGMT_LIBVIRT_NET" --model e1000 --persistent
+    fi
+
+    # Attach ISO as CD-ROM with boot order hd,cdrom — first boot falls through
+    # empty disk to ISO; after RHCOS install the VM boots from disk automatically
+    # (same pattern as CI's setup-caas-agents.sh using --cdrom + --boot hd,cdrom).
+    virt-xml "$vm" --add-device --disk "$ISO_FILE",device=cdrom,readonly=on,target.dev=hdc --define 2>/dev/null || true
+    virt-xml "$vm" --edit --boot hd,cdrom --define
+
+    virsh start "$vm"
+    echo "  Started $vm"
+done
+
+# ---------- step 21: wait for agents to register, approve, and label ----------
+
+EXPECTED_AGENTS=${#HOST_VMS[@]}
+
+info "Waiting for ${EXPECTED_AGENTS} agents to register (this may take 5-10 minutes)..."
+elapsed=0
+while true; do
+    count=$(KUBECONFIG="$KUBECONFIG" oc get agent -n "$AGENT_NAMESPACE" --no-headers 2>/dev/null | wc -l)
+    [ "$count" -ge "$EXPECTED_AGENTS" ] && break
+    sleep 30; elapsed=$((elapsed + 30))
+    echo "  ${elapsed}s elapsed — ${count}/${EXPECTED_AGENTS} agents registered"
+    if [ "$elapsed" -ge 900 ]; then
+        echo "ERROR: Timed out waiting for agents after ${elapsed}s (${count}/${EXPECTED_AGENTS} registered)"
+        KUBECONFIG="$KUBECONFIG" oc get agent -n "$AGENT_NAMESPACE" -o wide 2>&1 || true
+        exit 1
+    fi
+done
+info "All ${EXPECTED_AGENTS} agents registered"
+
+info "Approving, labeling, and annotating agents..."
+AGENT_MAC_MAP=$(KUBECONFIG="$KUBECONFIG" oc get agent -n "$AGENT_NAMESPACE" -o json | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+for agent in data['items']:
+    name = agent['metadata']['name']
+    inv = json.loads(agent['metadata']['annotations']['agent.agent-install.openshift.io/inventory'])
+    mac = inv['interfaces'][0]['mac_address']
+    print(f'{name} {mac}')
+")
+
+for agent in $(KUBECONFIG="$KUBECONFIG" oc get agent -n "$AGENT_NAMESPACE" -o jsonpath='{.items[*].metadata.name}'); do
+    KUBECONFIG="$KUBECONFIG" oc patch agent/"$agent" -n "$AGENT_NAMESPACE" --type=merge \
+        -p '{"spec":{"approved":true}}'
+    KUBECONFIG="$KUBECONFIG" oc label agent/"$agent" -n "$AGENT_NAMESPACE" \
+        "osac.openshift.io/resource_class=${AGENT_RESOURCE_CLASS}" --overwrite
+
+    # Match agent to VM by data-plane MAC and annotate with host_uuid
+    AGENT_MAC=$(echo "$AGENT_MAC_MAP" | awk -v a="$agent" '$1==a{print $2}')
+    for vm in "${HOST_VMS[@]}"; do
+        VM_MAC=$(virsh domiflist "$vm" | awk 'NR==3{print $5}')
+        if [ "$AGENT_MAC" = "$VM_MAC" ]; then
+            KUBECONFIG="$KUBECONFIG" oc annotate agent/"$agent" -n "$AGENT_NAMESPACE" \
+                "osac.openshift.io/host_uuid=$vm" --overwrite
+            echo "  Approved, labeled, and annotated $agent → $vm"
+            break
+        fi
+    done
+done
 
 info "Lab setup complete."
