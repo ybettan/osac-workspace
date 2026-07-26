@@ -1,0 +1,33 @@
+all:
+  vars:
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+
+  children:
+    switches:
+      hosts:
+        clab-agentless-net-lab-leaf-1:
+          ansible_host: ${MGMT_PREFIX}.11
+          ansible_user: cumulus
+          ansible_password: cumulus
+          ansible_become_password: cumulus
+          ansible_network_os: cumulus
+          trunk_ports: [swp1, swp3, swp4]
+          access_ports:
+            swp2: host-1
+        clab-agentless-net-lab-leaf-2:
+          ansible_host: ${MGMT_PREFIX}.12
+          ansible_user: cumulus
+          ansible_password: cumulus
+          ansible_become_password: cumulus
+          ansible_network_os: cumulus
+          trunk_ports: [swp1]
+          access_ports:
+            swp2: host-2
+            swp3: host-3
+
+    net_nodes:
+      hosts:
+        clab-agentless-net-lab-net-node:
+          ansible_host: ${MGMT_PREFIX}.30
+          ansible_user: root
+          ansible_password: root
