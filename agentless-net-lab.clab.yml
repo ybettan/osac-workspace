@@ -1,0 +1,56 @@
+name: agentless-net-lab
+
+mgmt:
+  network: agentless-lab-mgmt
+  bridge: ${MGMT_BRIDGE}
+  ipv4-subnet: ${MGMT_CIDR}
+  ipv4-gw: ${MGMT_GW}
+
+topology:
+  kinds:
+    cvx:
+      image: networkop/cx:5.3.0
+    linux:
+      image: alpine:3.19
+
+  nodes:
+    # Leaf switches (no spine — VLAN-only, no BGP routing needed)
+    leaf-1:
+      kind: cvx
+      mgmt-ipv4: ${MGMT_PREFIX}.11
+      binds:
+        - /lib/modules:/lib/modules:ro
+
+    leaf-2:
+      kind: cvx
+      mgmt-ipv4: ${MGMT_PREFIX}.12
+      binds:
+        - /lib/modules:/lib/modules:ro
+
+    # Network node (per-tenant routing, SNAT/DNAT via Linux namespaces)
+    net-node:
+      kind: linux
+      mgmt-ipv4: ${MGMT_PREFIX}.30
+
+    # Upstream router (simulates DC edge, eBGP peer for net-node)
+    upstream-router:
+      kind: linux
+      mgmt-ipv4: ${MGMT_PREFIX}.40
+
+  links:
+    # Leaf-1 <-> Leaf-2 trunk (carries all VLANs between switches)
+    - endpoints: ["leaf-1:swp1", "leaf-2:swp1"]
+
+    # Switch ports exposed to host for KVM VM attachment via bridges
+    - endpoints: ["leaf-1:swp2", "host:leaf1-swp2"]
+    - endpoints: ["leaf-2:swp2", "host:leaf2-swp2"]
+    - endpoints: ["leaf-2:swp3", "host:leaf2-swp3"]
+
+    # Mgmt VM data-plane connection to switch fabric (trunk port)
+    - endpoints: ["leaf-1:swp4", "host:leaf1-swp4"]
+
+    # Net-node trunk to switch fabric
+    - endpoints: ["leaf-1:swp3", "net-node:eth1"]
+
+    # Net-node <-> upstream router (eBGP peering link)
+    - endpoints: ["net-node:eth2", "upstream-router:eth1"]

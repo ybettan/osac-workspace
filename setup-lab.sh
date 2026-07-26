@@ -21,6 +21,26 @@ MGMT_IMAGE="${MGMT_IMAGE:-quay.io/osac-project/cluster-flavors:caas-4-22}"
 INSTALLER_DIR="${SCRIPT_DIR}/osac-installer"
 PULL_SECRET="${INSTALLER_DIR}/values/agentless-net-lab/pull-secret.json"
 
+# Containerlab
+TOPO_FILE="${SCRIPT_DIR}/agentless-net-lab.clab.yml"
+LAB_NAME="agentless-net-lab"
+PREFIX="clab-${LAB_NAME}"
+CONTAINERLAB="${CONTAINERLAB:-containerlab}"
+SWITCHES=("${PREFIX}-leaf-1" "${PREFIX}-leaf-2")
+NET_NODE="${PREFIX}-net-node"
+UPSTREAM_ROUTER="${PREFIX}-upstream-router"
+
+# BGP peering link (net-node:eth2 <-> upstream-router:eth1)
+BGP_NET_NODE_IP="10.253.0.1/30"
+BGP_UPSTREAM_IP="10.253.0.2/30"
+BGP_NET_NODE_AS=65001
+BGP_UPSTREAM_AS=65000
+
+# Ansible paths
+OSAC_AAP_DIR="${OSAC_AAP_DIR:-${SCRIPT_DIR}/osac-aap}"
+export ANSIBLE_COLLECTIONS_PATH="${OSAC_AAP_DIR}/collections:${OSAC_AAP_DIR}/vendor"
+INVENTORY="${SCRIPT_DIR}/ansible/inventory.yml"
+
 # ---------- helpers ----------
 
 info()  { echo "==> $*"; }
@@ -44,6 +64,21 @@ resolve_mgmt_network() {
 
 if [ "${1:-}" = "destroy" ]; then
     info "Destroying lab..."
+
+    # Remove mgmt VM data-plane bridge
+    if ip link show br-mgmt &>/dev/null; then
+        sudo ip link set br-mgmt down 2>/dev/null || true
+        sudo ip link delete br-mgmt 2>/dev/null || true
+        info "  Removed br-mgmt"
+    fi
+
+    # Destroy containerlab (needs MGMT_* env vars to parse clab.yml)
+    if docker ps --format '{{.Names}}' | grep -q "^${PREFIX}-"; then
+        resolve_mgmt_network
+        sudo MGMT_BRIDGE="$MGMT_BRIDGE" MGMT_CIDR="$MGMT_CIDR" MGMT_GW="$MGMT_GW" MGMT_PREFIX="$MGMT_PREFIX" \
+            ${CONTAINERLAB} destroy -t "$TOPO_FILE" --cleanup
+        info "  Removed containerlab"
+    fi
 
     # Kill stale dnsmasq from DNS fix (may outlive libvirt network)
     pkill -f "dnsmasq.*${MGMT_LIBVIRT_NET}" 2>/dev/null || true
@@ -254,5 +289,144 @@ else:
     print('  Already patched — skipping')
 " "$AAP_TOKEN" "$AAP_ROUTE"
 
+# ============================================================
+# CONTAINERLAB (switch fabric + network nodes)
+# ============================================================
+
+# ---------- step 11: deploy containerlab ----------
+
+if docker ps --format '{{.Names}}' | grep -q "^${PREFIX}-leaf-1$"; then
+    info "Lab already running — skipping deploy"
+else
+    info "Deploying Containerlab topology..."
+    sudo MGMT_BRIDGE="$MGMT_BRIDGE" MGMT_CIDR="$MGMT_CIDR" MGMT_GW="$MGMT_GW" MGMT_PREFIX="$MGMT_PREFIX" \
+        ${CONTAINERLAB} deploy -t "$TOPO_FILE"
+fi
+
+# ---------- step 12: wait for switches ----------
+
+wait_for_switch() {
+    local sw="$1"
+    local elapsed=0
+    while ! docker exec "$sw" nv show system 2>/dev/null | grep -q "hostname" ; do
+        sleep 3; elapsed=$((elapsed + 3))
+        [ "$elapsed" -ge 90 ] && break
+    done
+    local mgmt_ip
+    mgmt_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$sw")
+    while ! sshpass -p cumulus ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=2 cumulus@"$mgmt_ip" true &>/dev/null; do
+        sleep 3; elapsed=$((elapsed + 3))
+        [ "$elapsed" -ge 120 ] && break
+    done
+}
+
+info "Waiting for Cumulus switches to be ready (parallel)..."
+for sw in "${SWITCHES[@]}"; do
+    wait_for_switch "$sw" &
+done
+wait
+info "All switches ready."
+
+# ---------- step 13: fix sudo on switches ----------
+
+info "Fixing sudo permissions on switches..."
+for sw in "${SWITCHES[@]}"; do
+    docker exec "$sw" bash -c \
+        "echo 'cumulus ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/cumulus && chmod 440 /etc/sudoers.d/cumulus"
+    echo "  Fixed $sw"
+done
+
+# ---------- step 14: attach mgmt VM to switch fabric ----------
+
+if ip link show br-mgmt &>/dev/null; then
+    info "br-mgmt already exists — skipping"
+else
+    info "Creating br-mgmt and attaching mgmt VM to switch fabric..."
+    sudo ip link add br-mgmt type bridge
+    sudo ip link set leaf1-swp4 master br-mgmt
+    sudo ip link set br-mgmt up
+    virsh attach-interface "$MGMT_VM_NAME" bridge br-mgmt --model virtio --live --persistent
+fi
+
+# ---------- step 15: resolve inventory and configure trunk ports ----------
+
+
+RESOLVED_INVENTORY=$(mktemp)
+envsubst < "$INVENTORY" > "$RESOLVED_INVENTORY"
+
+info "Configuring trunk ports on switches..."
+ansible-playbook \
+    -i "$RESOLVED_INVENTORY" \
+    "${SCRIPT_DIR}/ansible/playbooks/configure_network.yml"
+
+# ---------- step 16: install packages on network node ----------
+
+info "Preparing network node..."
+docker exec "$NET_NODE" apk add --no-cache iptables iproute2 python3 openssh frr >/dev/null 2>&1
+docker exec "$NET_NODE" ssh-keygen -A >/dev/null 2>&1
+docker exec "$NET_NODE" sh -c "echo 'root:root' | chpasswd"
+docker exec "$NET_NODE" sh -c "echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config"
+docker exec "$NET_NODE" /usr/sbin/sshd
+echo "  Installed iptables, iproute2, python3, openssh (sshd running), frr"
+
+# ---------- step 17: configure BGP peering ----------
+
+info "Configuring BGP peering link..."
+docker exec "$NET_NODE" ip addr replace "$BGP_NET_NODE_IP" dev eth2
+docker exec "$NET_NODE" ip link set eth2 up
+docker exec "$UPSTREAM_ROUTER" ip addr replace "$BGP_UPSTREAM_IP" dev eth1
+docker exec "$UPSTREAM_ROUTER" ip link set eth1 up
+echo "  net-node:eth2 = ${BGP_NET_NODE_IP}, upstream-router:eth1 = ${BGP_UPSTREAM_IP}"
+
+info "Configuring FRR on net-node (AS ${BGP_NET_NODE_AS})..."
+docker exec "$NET_NODE" sh -c "cat > /etc/frr/frr.conf <<EOF
+frr defaults traditional
+hostname net-node
+log syslog informational
+
+router bgp ${BGP_NET_NODE_AS}
+ bgp router-id ${BGP_NET_NODE_IP%/*}
+ no bgp ebgp-requires-policy
+ neighbor ${BGP_UPSTREAM_IP%/*} remote-as ${BGP_UPSTREAM_AS}
+ address-family ipv4 unicast
+  redistribute static
+ exit-address-family
+EOF"
+docker exec "$NET_NODE" sh -c "sed -i 's/bgpd=no/bgpd=yes/' /etc/frr/daemons"
+docker exec "$NET_NODE" sh -c "/usr/lib/frr/frrinit.sh start" 2>/dev/null || true
+
+info "Preparing upstream router..."
+docker exec "$UPSTREAM_ROUTER" apk add --no-cache frr >/dev/null 2>&1
+echo "  Installed frr on upstream-router"
+
+info "Configuring FRR on upstream-router (AS ${BGP_UPSTREAM_AS})..."
+docker exec "$UPSTREAM_ROUTER" sh -c "cat > /etc/frr/frr.conf <<EOF
+frr defaults traditional
+hostname upstream-router
+log syslog informational
+
+router bgp ${BGP_UPSTREAM_AS}
+ bgp router-id ${BGP_UPSTREAM_IP%/*}
+ no bgp ebgp-requires-policy
+ neighbor ${BGP_NET_NODE_IP%/*} remote-as ${BGP_NET_NODE_AS}
+ address-family ipv4 unicast
+ exit-address-family
+EOF"
+docker exec "$UPSTREAM_ROUTER" sh -c "sed -i 's/bgpd=no/bgpd=yes/' /etc/frr/daemons"
+docker exec "$UPSTREAM_ROUTER" sh -c "/usr/lib/frr/frrinit.sh start" 2>/dev/null || true
+
+info "Waiting for BGP session to establish (10s)..."
+sleep 10
+
+# ---------- step 18: create inventory ConfigMap ----------
+
+info "Creating agentless-net inventory ConfigMap..."
+KUBECONFIG="$KUBECONFIG" oc create configmap agentless-net-inventory \
+    --from-file=inventory.yml="$RESOLVED_INVENTORY" \
+    -n "$OSAC_NS" \
+    --dry-run=client -o yaml | \
+    KUBECONFIG="$KUBECONFIG" oc apply -f -
+
+rm -f "$RESOLVED_INVENTORY"
 
 info "Lab setup complete."
