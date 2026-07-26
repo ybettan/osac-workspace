@@ -17,7 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # mgmt-server
 MGMT_CLONE_NAME="agentless-lab-mgmt"
-MGMT_IMAGE="${MGMT_IMAGE:-quay.io/osac-project/cluster-flavors:caas}"
+MGMT_IMAGE="${MGMT_IMAGE:-quay.io/osac-project/cluster-flavors:caas-4-22}"
 INSTALLER_DIR="${SCRIPT_DIR}/osac-installer"
 PULL_SECRET="${INSTALLER_DIR}/values/agentless-net-lab/pull-secret.json"
 
@@ -88,8 +88,8 @@ fi
 
 # ---------- step 2: pull snapshot flavor ----------
 
-if cluster-tool flavors 2>/dev/null | grep -q "caas"; then
-    info "Snapshot flavor 'caas' already pulled — skipping"
+if cluster-tool flavors 2>/dev/null | grep -q "caas-4-22"; then
+    info "Snapshot flavor 'caas-4-22' already pulled — skipping"
 else
     info "Pulling mgmt-server snapshot..."
     cluster-tool pull "$MGMT_IMAGE"
@@ -101,7 +101,7 @@ if virsh dominfo "$MGMT_VM_NAME" &>/dev/null; then
     info "mgmt-server already running — skipping boot"
 else
     info "Booting mgmt-server (this may take several minutes)..."
-    cluster-tool boot --flavor caas --name "$MGMT_CLONE_NAME" --pull-secret "$PULL_SECRET"
+    cluster-tool boot --flavor caas-4-22 --name "$MGMT_CLONE_NAME" --pull-secret "$PULL_SECRET"
 fi
 
 # ---------- step 4: resolve management network ----------
