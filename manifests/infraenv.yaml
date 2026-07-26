@@ -1,0 +1,9 @@
+apiVersion: agent-install.openshift.io/v1beta1
+kind: InfraEnv
+metadata:
+  name: ${INFRAENV_NAME}
+  namespace: ${AGENT_NAMESPACE}
+spec:
+  sshAuthorizedKey: "${SSH_PUB_KEY}"
+  pullSecretRef:
+    name: pull-secret
