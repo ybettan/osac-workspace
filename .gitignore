@@ -101,6 +101,7 @@ osac-aap/
 osac-installer/
 bare-metal-fulfillment-operator/
 osac-csi-driver/
+cluster-tool/
 
 # Bootstrap-managed reference repos (cloned read-only, no fork remote)
 osac-ux/
@@ -126,6 +127,9 @@ docs/pr-dashboard/data.json
 !.artifacts/prd/
 .artifacts/prd/*
 !.artifacts/prd/config.json
+
+# Containerlab generated state
+clab-*/
 
 # AI Tooling
 .cursor/
