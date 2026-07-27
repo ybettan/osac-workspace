@@ -213,7 +213,7 @@ AAP_TOKEN=$(KUBECONFIG="$KUBECONFIG" oc exec deploy/osac-operator -n "$OSAC_NS" 
     sh -c 'echo $OSAC_AAP_TOKEN' 2>/dev/null)
 AAP_ROUTE=$(KUBECONFIG="$KUBECONFIG" oc get route osac-aap -n "$OSAC_NS" -o jsonpath='{.spec.host}')
 
-info "Patching cluster-fulfillment instance group (hostNetwork)..."
+info "Patching cluster-fulfillment instance group (hostNetwork + agentless-net inventory)..."
 python3 -c "
 import json, yaml, urllib.request, ssl, sys
 
@@ -226,9 +226,25 @@ ctx.verify_mode = ssl.CERT_NONE
 req = urllib.request.Request(url, headers={'Authorization': f'Bearer {token}'})
 current = json.loads(urllib.request.urlopen(req, context=ctx).read())
 spec = yaml.safe_load(current['pod_spec_override'])
+changed = False
 
 if not spec['spec'].get('hostNetwork'):
     spec['spec']['hostNetwork'] = True
+    changed = True
+
+for c in spec['spec'].get('containers', []):
+    if c.get('name') == 'worker':
+        mounts = c.get('volumeMounts', [])
+        if not any(m.get('name') == 'agentless-net-inventory' for m in mounts):
+            mounts.append({'name': 'agentless-net-inventory', 'mountPath': '/var/config/agentless-net', 'readOnly': True})
+            changed = True
+
+volumes = spec['spec'].get('volumes', [])
+if not any(v.get('name') == 'agentless-net-inventory' for v in volumes):
+    volumes.append({'name': 'agentless-net-inventory', 'configMap': {'name': 'agentless-net-inventory', 'optional': True}})
+    changed = True
+
+if changed:
     data = json.dumps({'pod_spec_override': yaml.dump(spec, default_flow_style=False)}).encode()
     req = urllib.request.Request(url, data=data, method='PATCH',
         headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'})
@@ -237,5 +253,6 @@ if not spec['spec'].get('hostNetwork'):
 else:
     print('  Already patched — skipping')
 " "$AAP_TOKEN" "$AAP_ROUTE"
+
 
 info "Lab setup complete."
