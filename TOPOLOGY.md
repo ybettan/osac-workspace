@@ -155,3 +155,32 @@ Cluster-tool and containerlab share a single management subnet:
 
 This eliminates the need for a separate containerlab management network and ensures
 all nodes (VM and containers) are on the same L2 segment.
+
+## Worker Joining Process
+
+### Standard OpenShift
+
+In a standard (non-HyperShift) OpenShift cluster, the kube-apiserver runs on master
+nodes with `hostNetwork: true` and binds to `0.0.0.0:6443`. This makes it accessible
+on **all NICs** simultaneously — no LoadBalancer is needed. Workers connect to
+`api-int.<cluster>` or `api.<cluster>`, both of which resolve to the master node's IP
+and reach the same process.
+
+### HyperShift (what OSAC uses)
+
+OSAC uses HyperShift (hosted control planes). The control plane does not run on the
+worker nodes — it runs as **pods** on the management cluster:
+
+- Each hosted cluster gets its own kube-apiserver Deployment in a dedicated namespace
+  (e.g., `osac-e2e-ci-order-5fptc-order-5fptc`)
+- The kube-apiserver is a regular pod inside the management cluster's OVN network
+  (NOT `hostNetwork`) — it cannot bind to host IPs directly
+- OVN and MetalLB are the **data plane** — on the management cluster they handle
+  service routing and external IP assignment; on worker nodes they carry tenant
+  workload traffic through the switch fabric. To make the kube-apiserver reachable
+  from workers, HyperShift creates a LoadBalancer Service; MetalLB assigns a VIP
+  from `192.168.X.240-250`
+- Workers connect to `api.<cluster-name>.<domain>:6443` — HyperShift does not use
+  `api-int` because the control plane is always external to workers
+- Konnectivity proxy handles the reverse direction (API server → workers) via a
+  tunnel that workers initiate outbound to the kube-apiserver
