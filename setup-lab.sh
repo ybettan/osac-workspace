@@ -226,6 +226,26 @@ else
     info "DNS forwarding (layer 2) already fixed — skipping"
 fi
 
+# ---------- step 5c: enable IP forwarding on management VM ----------
+#
+# The hosted clusters' kube-apiserver pods run inside OVN on the management
+# VM (br-ex, 192.168.180.x). MetalLB announces their VIPs on the management
+# network (192.168.X.240-250) and iptables DNAT rules rewrite incoming
+# packets to the pod IPs. But the kernel must forward these packets from
+# the management NIC (enp1s0) into the OVN data network — which requires
+# ip_forward=1. OVN disables it by default because OVN's own datapath
+# doesn't need kernel forwarding.
+
+info "Enabling IP forwarding on management VM..."
+KUBECONFIG="$KUBECONFIG" oc debug node/"$(KUBECONFIG="$KUBECONFIG" oc get node -o jsonpath='{.items[0].metadata.name}')" \
+    -- chroot /host bash -c '
+    if [ "$(sysctl -n net.ipv4.ip_forward)" = "0" ]; then
+        sysctl -w net.ipv4.ip_forward=1
+    else
+        echo "ip_forward already enabled"
+    fi
+' 2>&1 | tail -3
+
 # ============================================================
 # OSAC REFRESH (bring snapshot cluster back to life)
 # ============================================================
