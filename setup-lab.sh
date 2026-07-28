@@ -175,11 +175,22 @@ info "Management network: ${MGMT_CIDR} on bridge ${MGMT_BRIDGE}"
 
 # ---------- step 5: fix DNS forwarding for hosted clusters ----------
 #
-# cluster-tool creates the libvirt network with localOnly='yes' on the mgmt
-# cluster's domain. This prevents the libvirt dnsmasq from forwarding DNS
-# queries for subdomains (like hosted.*) to upstream resolvers. Worker VMs
-# that use this dnsmasq cannot resolve guest cluster API hostnames created
-# in Route 53. Flip to localOnly='no' so unknown subdomains are forwarded.
+# Workers resolve DNS via two layers:
+#   Layer 1: libvirt dnsmasq (192.168.X.1) — the workers' DNS server (set by DHCP)
+#   Layer 2: NetworkManager dnsmasq (127.0.0.1) — libvirt dnsmasq's upstream
+#
+# Two fixes are needed so hosted cluster API hostnames (created in Route 53
+# by the external_access AAP role) reach the workers correctly:
+#
+# Fix A (layer 1): cluster-tool creates the libvirt network with localOnly='yes'
+# on the mgmt cluster's domain, which prevents the libvirt dnsmasq from
+# forwarding *.hosted.<domain> queries to upstream. Flip to localOnly='no'.
+#
+# Fix B (layer 2): cluster-tool adds a NetworkManager dnsmasq wildcard
+# (address=/<domain>/<public-ip>) that catches ALL subdomains — including
+# *.hosted.<domain> — and returns the bare-metal host's public IP instead
+# of forwarding to Route 53. Add a server= directive so *.hosted.<domain>
+# queries bypass the wildcard and are forwarded to upstream DNS.
 
 DNSMASQ_CONF="/var/lib/libvirt/dnsmasq/${MGMT_LIBVIRT_NET}.conf"
 if grep -q "^local=/" "$DNSMASQ_CONF" 2>/dev/null; then
@@ -200,7 +211,19 @@ if grep -q "^local=/" "$DNSMASQ_CONF" 2>/dev/null; then
         pgrep -f "dnsmasq.*${MGMT_LIBVIRT_NET}" > "/var/run/libvirt/network/${MGMT_LIBVIRT_NET}.pid"
     fi
 else
-    info "DNS forwarding already fixed — skipping"
+    info "DNS forwarding (layer 1) already fixed — skipping"
+fi
+
+# Fix B: bypass cluster-tool wildcard for hosted cluster subdomains
+NM_DNSMASQ_CONF="/etc/NetworkManager/dnsmasq.d/cluster-${MGMT_CLONE_NAME}.conf"
+HOSTED_DOMAIN="hosted.test-infra-cluster-${MGMT_CLONE_NAME}.redhat.com"
+
+if [ -f "$NM_DNSMASQ_CONF" ] && ! grep -q "server=/${HOSTED_DOMAIN}/" "$NM_DNSMASQ_CONF" 2>/dev/null; then
+    info "Bypassing DNS wildcard for ${HOSTED_DOMAIN}..."
+    echo "server=/${HOSTED_DOMAIN}/8.8.8.8" >> "$NM_DNSMASQ_CONF"
+    systemctl restart NetworkManager
+else
+    info "DNS forwarding (layer 2) already fixed — skipping"
 fi
 
 # ============================================================
