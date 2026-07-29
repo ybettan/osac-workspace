@@ -361,6 +361,44 @@ else:
     print('  Already patched — skipping')
 " "$AAP_TOKEN" "$AAP_ROUTE"
 
+# ---------- step 11b: patch AAP project to use fork ----------
+#
+# The snapshot's AAP project points to osac-project/osac-aap at a pinned
+# commit. Override it to use the agentless-net branch from the fork which
+# has the hostNetwork fix and agentless_net collection updates.
+# Goes away once the changes are merged upstream.
+
+AAP_PROJECT_GIT_URI="https://github.com/ybettan/osac-aap"
+AAP_PROJECT_GIT_BRANCH="agentless-net"
+
+info "Patching AAP project to ${AAP_PROJECT_GIT_URI} (${AAP_PROJECT_GIT_BRANCH})..."
+python3 -c "
+import json, urllib.request, ssl, sys
+
+token, route, git_uri, git_branch = sys.argv[1:5]
+url = f'https://{route}/api/controller/v2/projects/8/'
+ctx = ssl.create_default_context()
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
+
+req = urllib.request.Request(url, headers={'Authorization': f'Bearer {token}'})
+current = json.loads(urllib.request.urlopen(req, context=ctx).read())
+
+if current['scm_url'] == git_uri and current['scm_branch'] == git_branch:
+    print('  Already patched — skipping')
+else:
+    data = json.dumps({'scm_url': git_uri, 'scm_branch': git_branch}).encode()
+    req = urllib.request.Request(url, data=data, method='PATCH',
+        headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'})
+    urllib.request.urlopen(req, context=ctx)
+    # Trigger project sync
+    sync_url = f'https://{route}/api/controller/v2/projects/8/update/'
+    req = urllib.request.Request(sync_url, data=b'', method='POST',
+        headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'})
+    urllib.request.urlopen(req, context=ctx)
+    print('  Patched and syncing')
+" "$AAP_TOKEN" "$AAP_ROUTE" "$AAP_PROJECT_GIT_URI" "$AAP_PROJECT_GIT_BRANCH"
+
 # ============================================================
 # CONTAINERLAB (switch fabric + network nodes)
 # ============================================================
