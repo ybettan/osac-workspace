@@ -28,13 +28,14 @@ Two logical networks:
                      │            leaf-1                   │──────────────│            leaf-2                   │
                      └───┬──────────────────┬──────────────┘ swp1──swp1   └─────┬──────────────────┬────────────┘
                          │ swp2             │ swp4              (trunk)          │ swp2             │ swp3
-                         │ (untagged)       │ (untagged)                        │ (untagged)       │ (untagged)
+                         │ (untagged)       │ (trunk)                           │ (untagged)       │ (untagged)
                          │                  │                                   │                  │
                     ┌────┴────┐        ┌────┴────┐                         ┌────┴────┐        ┌────┴────┐
                     │ host-1  │        │ mgmt VM │                         │ host-2  │        │ host-3  │
                     └─────────┘        └─────────┘                         └─────────┘        └─────────┘
 
-All ports in default VLAN — full L2 connectivity between all nodes
+swp4 is a trunk port (inventory: leaf-1 trunk_ports includes swp4)
+Other host-facing ports start untagged — full L2 connectivity in default VLAN
 ```
 
 ## 2) Management network before VLANs
@@ -70,7 +71,7 @@ All ports in default VLAN — full L2 connectivity between all nodes
                      │            leaf-1                   │──────────────│            leaf-2                   │
                      └───┬──────────────────┬──────────────┘ swp1──swp1   └─────┬──────────────────┬────────────┘
                          │ swp2             │ swp4              (trunk)          │ swp2             │ swp3
-                         │ (untagged)       │ (untagged)                        │ VLAN 100         │ (untagged)
+                         │ (untagged)       │ (trunk)                           │ VLAN 100         │ (untagged)
                          │                  │                                   │ (access)         │
                     ┌────┴────┐        ┌────┴────┐                         ┌────┴────┐        ┌────┴────┐
                     │ host-1  │        │ mgmt VM │                         │ host-2  │        │ host-3  │
