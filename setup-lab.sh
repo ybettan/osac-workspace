@@ -48,7 +48,7 @@ HOST_VETHS=("leaf1-swp2" "leaf2-swp2" "leaf2-swp3")
 # Agent registration
 AGENT_RESOURCE_CLASS="ci-worker"
 AGENT_NAMESPACE="hardware-inventory"
-INFRAENV_NAME="agentless-net-discovery"
+INFRAENV_NAME="infraenv"
 SSH_PUB_KEY="$(cat ~/.ssh/id_rsa.pub 2>/dev/null || cat ~/.ssh/id_ed25519.pub 2>/dev/null || true)"
 
 # Ansible paths
