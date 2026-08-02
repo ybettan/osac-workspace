@@ -476,7 +476,7 @@ fi
 # ---------- step 15: resolve inventory and configure trunk ports ----------
 
 
-RESOLVED_INVENTORY=$(mktemp)
+RESOLVED_INVENTORY=$(mktemp --suffix=.yml)
 envsubst < "$INVENTORY" > "$RESOLVED_INVENTORY"
 
 info "Configuring trunk ports on switches..."
