@@ -414,6 +414,46 @@ else:
     print('  Patched and syncing')
 " "$AAP_TOKEN" "$AAP_ROUTE" "$AAP_PROJECT_GIT_URI" "$AAP_PROJECT_GIT_BRANCH"
 
+info "Waiting for AAP project sync..."
+elapsed=0
+while true; do
+    status=$(python3 -c "
+import json, urllib.request, ssl, sys
+token, route = sys.argv[1], sys.argv[2]
+ctx = ssl.create_default_context()
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
+req = urllib.request.Request(
+    f'https://{route}/api/controller/v2/projects/8/',
+    headers={'Authorization': f'Bearer {token}'})
+print(json.loads(urllib.request.urlopen(req, context=ctx).read()).get('status',''))
+" "$AAP_TOKEN" "$AAP_ROUTE" 2>/dev/null)
+    if [ "$status" = "successful" ]; then
+        info "  AAP project synced"
+        break
+    fi
+    if [ "$status" = "failed" ] || [ "$status" = "error" ]; then
+        echo "  WARN: sync failed (${status}), retrying..."
+        python3 -c "
+import urllib.request, ssl, sys
+token, route = sys.argv[1], sys.argv[2]
+ctx = ssl.create_default_context()
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
+req = urllib.request.Request(
+    f'https://{route}/api/controller/v2/projects/8/update/',
+    data=b'', method='POST',
+    headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'})
+urllib.request.urlopen(req, context=ctx)
+" "$AAP_TOKEN" "$AAP_ROUTE" 2>/dev/null
+    fi
+    sleep 10; elapsed=$((elapsed + 10))
+    if [ "$elapsed" -ge 120 ]; then
+        echo "ERROR: AAP project sync not successful after ${elapsed}s (status: ${status})"
+        exit 1
+    fi
+done
+
 # ============================================================
 # CONTAINERLAB (switch fabric + network nodes)
 # ============================================================
