@@ -299,6 +299,21 @@ else
     echo "    AWS_SECRET_ACCESS_KEY=..."
 fi
 
+# ---------- step 9b: patch SSH key for NMState live apply ----------
+#
+# The cluster_infra role applies NMState config to discovery agents via SSH.
+# The agents accept the InfraEnv's sshAuthorizedKey (our host's public key).
+# Inject the matching private key so the AAP runner pod can SSH to agents.
+
+SSH_PRIVATE_KEY="${HOME}/.ssh/id_rsa"
+if [ -f "$SSH_PRIVATE_KEY" ]; then
+    info "Patching cluster-fulfillment-ig with SSH key..."
+    KUBECONFIG="$KUBECONFIG" oc patch secret cluster-fulfillment-ig -n "$OSAC_NS" --type merge \
+        -p "{\"data\":{\"SERVER_SSH_KEY\":\"$(base64 -w0 < "$SSH_PRIVATE_KEY")\"}}"
+else
+    echo "  WARN: ${SSH_PRIVATE_KEY} not found — NMState live apply will not work."
+fi
+
 # ---------- step 10: validate OSAC ----------
 
 info "Validating OSAC..."
