@@ -121,6 +121,8 @@ if [ "${1:-}" = "destroy" ]; then
     # Remove iptables FORWARD rules
     iptables -D FORWARD -s 192.168.0.0/16 -j ACCEPT 2>/dev/null || true
     iptables -D FORWARD -d 192.168.0.0/16 -j ACCEPT 2>/dev/null || true
+    iptables -D FORWARD -s 10.0.0.0/8 -j ACCEPT 2>/dev/null || true
+    iptables -D FORWARD -d 10.0.0.0/8 -j ACCEPT 2>/dev/null || true
 
     info "Done."
     exit 0
@@ -134,11 +136,16 @@ fi
 # Libvirt (used by cluster-tool) creates NAT rules in nftables, but iptables
 # and nftables are evaluated independently — Docker's DROP overrides libvirt's
 # nftables ACCEPT, leaving VMs with no internet access.
+# The 192.168.0.0/16 rule covers the management network (libvirt VMs).
+# The 10.0.0.0/8 rule covers the VLAN data network (worker data NICs bridged
+# to containerlab switches via br-host* bridges).
 if iptables -S FORWARD 2>/dev/null | grep -q "\-P FORWARD DROP"; then
     if ! iptables -C FORWARD -s 192.168.0.0/16 -j ACCEPT 2>/dev/null; then
         info "Adding iptables FORWARD rules for libvirt VMs..."
         iptables -I FORWARD -s 192.168.0.0/16 -j ACCEPT
         iptables -I FORWARD -d 192.168.0.0/16 -j ACCEPT
+        iptables -I FORWARD -s 10.0.0.0/8 -j ACCEPT
+        iptables -I FORWARD -d 10.0.0.0/8 -j ACCEPT
     fi
 fi
 
