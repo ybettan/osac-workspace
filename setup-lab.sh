@@ -541,6 +541,9 @@ docker exec "$NET_NODE" sh -c "echo 'PermitRootLogin yes' >> /etc/ssh/sshd_confi
 docker exec "$NET_NODE" /usr/sbin/sshd
 echo "  Installed iptables, iproute2, python3, openssh (sshd running), frr"
 
+docker exec "$NET_NODE" ip addr replace 10.0.0.30/24 dev eth1
+echo "  net-node:eth1 = 10.0.0.30/24 (native VLAN)"
+
 # ---------- step 17: configure BGP peering ----------
 
 info "Configuring BGP peering link..."
