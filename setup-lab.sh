@@ -590,6 +590,16 @@ docker exec "$UPSTREAM_ROUTER" sh -c "/usr/lib/frr/frrinit.sh start" 2>/dev/null
 info "Waiting for BGP session to establish (10s)..."
 sleep 10
 
+# Enable IP forwarding on upstream router so it can route between mgmt and BGP links
+docker exec "$UPSTREAM_ROUTER" sysctl -w net.ipv4.ip_forward=1 >/dev/null
+
+# Add static route on the host so that public IPs (used in tenant kubeconfigs)
+# are routed through the lab fabric instead of the internet.
+# The upstream router learns /32 routes from the net-node via BGP and forwards
+# traffic to it over the peering link.
+ip route replace 192.168.100.0/24 via "${MGMT_PREFIX}.40"
+echo "  Added host route 192.168.100.0/24 via ${MGMT_PREFIX}.40 (upstream-router)"
+
 # ---------- step 18: create inventory ConfigMap ----------
 
 info "Creating agentless-net inventory ConfigMap..."
