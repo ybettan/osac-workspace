@@ -338,20 +338,13 @@ KUBECONFIG="$KUBECONFIG" oc get pods -n "$OSAC_NS" --no-headers | \
 # InternalIP (192.168.X.240-250 on the mgmt network). Override to use
 # the native VLAN subnet so kube-apiserver traffic goes through the switch
 # fabric instead of the management network.
-
-MGMT_NODE=$(KUBECONFIG="$KUBECONFIG" oc get nodes -o name | head -1 | cut -d/ -f2)
-
-info "Assigning native VLAN IP on mgmt VM data NIC..."
-KUBECONFIG="$KUBECONFIG" oc debug "node/$MGMT_NODE" -- \
-    chroot /host ip addr replace 10.0.0.10/24 dev enp6s0
-echo "  mgmt VM enp6s0 = 10.0.0.10/24 (native VLAN)"
+# The mgmt VM data NIC IP and L2Advertisement are configured after step 14
+# (the data NIC doesn't exist until br-mgmt is created).
 
 info "Patching MetalLB to use fabric subnet..."
 KUBECONFIG="$KUBECONFIG" oc patch ipaddresspool caas-address-pool -n metallb-system \
     --type=merge -p '{"spec":{"addresses":["10.0.0.240-10.0.0.250"]}}'
-KUBECONFIG="$KUBECONFIG" oc patch l2advertisement caas-l2-advertisement -n metallb-system \
-    --type=merge -p '{"spec":{"interfaces":["enp6s0"]}}'
-echo "  Pool: 10.0.0.240-10.0.0.250, announcing on enp6s0 (fabric)"
+echo "  Pool: 10.0.0.240-10.0.0.250"
 
 # ---------- step 11: patch AAP instance group for lab networking ----------
 #
@@ -540,6 +533,22 @@ else
     sudo ip link set br-mgmt up
     virsh attach-interface "$MGMT_VM_NAME" bridge br-mgmt --model virtio --live --persistent
 fi
+
+# Assign native VLAN IP on the mgmt VM's fabric NIC and configure MetalLB
+# to announce VIPs on it. Find the NIC by its MAC (br-mgmt bridge member).
+FABRIC_MAC=$(virsh domiflist "$MGMT_VM_NAME" | grep br-mgmt | awk '{print $5}')
+MGMT_NODE=$(KUBECONFIG="$KUBECONFIG" oc get nodes -o name | head -1 | cut -d/ -f2)
+FABRIC_NIC=$(KUBECONFIG="$KUBECONFIG" oc debug "node/$MGMT_NODE" -- \
+    chroot /host ip -o link show 2>&1 | grep "$FABRIC_MAC" | awk -F'[ :]+' '{print $2}')
+
+info "Assigning native VLAN IP on mgmt VM data NIC ($FABRIC_NIC)..."
+KUBECONFIG="$KUBECONFIG" oc debug "node/$MGMT_NODE" -- \
+    chroot /host ip addr replace 10.0.0.10/24 dev "$FABRIC_NIC"
+echo "  mgmt VM $FABRIC_NIC = 10.0.0.10/24 (native VLAN)"
+
+KUBECONFIG="$KUBECONFIG" oc patch l2advertisement caas-l2-advertisement -n metallb-system \
+    --type=merge -p "{\"spec\":{\"interfaces\":[\"$FABRIC_NIC\"]}}"
+echo "  L2Advertisement: announcing on $FABRIC_NIC (fabric)"
 
 # ---------- step 15: resolve inventory and configure trunk ports ----------
 
