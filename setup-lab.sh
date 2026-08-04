@@ -539,11 +539,11 @@ fi
 FABRIC_MAC=$(virsh domiflist "$MGMT_VM_NAME" | grep br-mgmt | awk '{print $5}')
 MGMT_NODE=$(KUBECONFIG="$KUBECONFIG" oc get nodes -o name | head -1 | cut -d/ -f2)
 FABRIC_NIC=$(KUBECONFIG="$KUBECONFIG" oc debug "node/$MGMT_NODE" -- \
-    chroot /host ip -o link show 2>&1 | grep "$FABRIC_MAC" | awk -F'[ :]+' '{print $2}')
+    nsenter -t 1 -n ip -o link show 2>&1 | grep "$FABRIC_MAC" | awk -F'[ :]+' '{print $2}')
 
 info "Assigning native VLAN IP on mgmt VM data NIC ($FABRIC_NIC)..."
 KUBECONFIG="$KUBECONFIG" oc debug "node/$MGMT_NODE" -- \
-    chroot /host ip addr replace 10.0.0.10/24 dev "$FABRIC_NIC"
+    nsenter -t 1 -n ip addr replace 10.0.0.10/24 dev "$FABRIC_NIC"
 echo "  mgmt VM $FABRIC_NIC = 10.0.0.10/24 (native VLAN)"
 
 KUBECONFIG="$KUBECONFIG" oc patch l2advertisement caas-l2-advertisement -n metallb-system \
