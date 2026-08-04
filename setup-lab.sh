@@ -543,7 +543,15 @@ FABRIC_NIC=$(KUBECONFIG="$KUBECONFIG" oc debug "node/$MGMT_NODE" -- \
 
 info "Assigning native VLAN IP on mgmt VM data NIC ($FABRIC_NIC)..."
 KUBECONFIG="$KUBECONFIG" oc debug "node/$MGMT_NODE" -- \
-    nsenter -t 1 -n ip addr replace 10.0.0.10/24 dev "$FABRIC_NIC"
+    nsenter -a -t 1 -- bash -c "
+        if nmcli connection show fabric-native &>/dev/null; then
+            nmcli connection up fabric-native 2>/dev/null
+        else
+            nmcli connection add type ethernet ifname $FABRIC_NIC con-name fabric-native \
+                ipv4.method manual ipv4.addresses 10.0.0.10/24 ipv6.method disabled
+            nmcli connection up fabric-native
+        fi
+    "
 echo "  mgmt VM $FABRIC_NIC = 10.0.0.10/24 (native VLAN)"
 
 KUBECONFIG="$KUBECONFIG" oc patch l2advertisement caas-l2-advertisement -n metallb-system \
