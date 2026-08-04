@@ -332,6 +332,27 @@ info "OSAC is running:"
 KUBECONFIG="$KUBECONFIG" oc get pods -n "$OSAC_NS" --no-headers | \
     awk '{print $3}' | sort | uniq -c | sort -rn
 
+# ---------- step 10b: route kube-apiserver VIPs through fabric ----------
+#
+# MetalLB's configure-metallb.sh auto-configures the pool from the node's
+# InternalIP (192.168.X.240-250 on the mgmt network). Override to use
+# the native VLAN subnet so kube-apiserver traffic goes through the switch
+# fabric instead of the management network.
+
+MGMT_NODE=$(KUBECONFIG="$KUBECONFIG" oc get nodes -o name | head -1 | cut -d/ -f2)
+
+info "Assigning native VLAN IP on mgmt VM data NIC..."
+KUBECONFIG="$KUBECONFIG" oc debug "node/$MGMT_NODE" -- \
+    chroot /host ip addr replace 10.0.0.10/24 dev enp6s0
+echo "  mgmt VM enp6s0 = 10.0.0.10/24 (native VLAN)"
+
+info "Patching MetalLB to use fabric subnet..."
+KUBECONFIG="$KUBECONFIG" oc patch ipaddresspool caas-address-pool -n metallb-system \
+    --type=merge -p '{"spec":{"addresses":["10.0.0.240-10.0.0.250"]}}'
+KUBECONFIG="$KUBECONFIG" oc patch l2advertisement caas-l2-advertisement -n metallb-system \
+    --type=merge -p '{"spec":{"interfaces":["enp6s0"]}}'
+echo "  Pool: 10.0.0.240-10.0.0.250, announcing on enp6s0 (fabric)"
+
 # ---------- step 11: patch AAP instance group for lab networking ----------
 #
 # The cluster-fulfillment runner pods need hostNetwork to reach containerlab
