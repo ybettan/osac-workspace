@@ -224,13 +224,22 @@ else
     info "DNS forwarding (layer 1) already fixed — skipping"
 fi
 
-# Fix B: bypass cluster-tool wildcard for hosted cluster subdomains
+# Fix B: bypass cluster-tool DNS wildcard for internal cluster queries.
+# cluster-tool creates address=/<cluster-domain>/<public-ip> which catches
+# ALL subdomains. With ndots:5, pods try search domains before the name
+# as-is, so keycloak.keycloak.svc.cluster.local gets looked up as
+# keycloak.keycloak.svc.cluster.local.<cluster-domain> — matching the
+# wildcard and returning the hypervisor IP instead of the ClusterIP.
+# Add server= bypasses so dnsmasq forwards these to real DNS (which
+# returns NXDOMAIN), allowing the pod resolver to try the name as-is.
 NM_DNSMASQ_CONF="/etc/NetworkManager/dnsmasq.d/cluster-${MGMT_CLONE_NAME}.conf"
-HOSTED_DOMAIN="hosted.test-infra-cluster-${MGMT_CLONE_NAME}.redhat.com"
+CLUSTER_DOMAIN="test-infra-cluster-${MGMT_CLONE_NAME}.redhat.com"
+HOSTED_DOMAIN="hosted.${CLUSTER_DOMAIN}"
 
-if [ -f "$NM_DNSMASQ_CONF" ] && ! grep -q "server=/${HOSTED_DOMAIN}/" "$NM_DNSMASQ_CONF" 2>/dev/null; then
-    info "Bypassing DNS wildcard for ${HOSTED_DOMAIN}..."
+if [ -f "$NM_DNSMASQ_CONF" ] && ! grep -q "svc.cluster.local" "$NM_DNSMASQ_CONF" 2>/dev/null; then
+    info "Bypassing DNS wildcard for cluster-internal and hosted queries..."
     echo "server=/${HOSTED_DOMAIN}/8.8.8.8" >> "$NM_DNSMASQ_CONF"
+    echo "server=/svc.cluster.local.${CLUSTER_DOMAIN}/8.8.8.8" >> "$NM_DNSMASQ_CONF"
     systemctl restart NetworkManager
 else
     info "DNS forwarding (layer 2) already fixed — skipping"
