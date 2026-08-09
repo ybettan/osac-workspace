@@ -613,8 +613,8 @@ docker exec "$NET_NODE" sh -c "sed -i 's/bgpd=no/bgpd=yes/' /etc/frr/daemons"
 docker exec "$NET_NODE" sh -c "/usr/lib/frr/frrinit.sh start" 2>/dev/null || true
 
 info "Preparing upstream router..."
-docker exec "$UPSTREAM_ROUTER" apk add --no-cache frr >/dev/null 2>&1
-echo "  Installed frr on upstream-router"
+docker exec "$UPSTREAM_ROUTER" apk add --no-cache frr iptables >/dev/null 2>&1
+echo "  Installed frr, iptables on upstream-router"
 
 info "Configuring FRR on upstream-router (AS ${BGP_UPSTREAM_AS})..."
 docker exec "$UPSTREAM_ROUTER" sh -c "cat > /etc/frr/frr.conf <<EOF
@@ -637,6 +637,17 @@ sleep 10
 
 # Enable IP forwarding on upstream router so it can route between mgmt and BGP links
 docker exec "$UPSTREAM_ROUTER" sysctl -w net.ipv4.ip_forward=1 >/dev/null
+
+# --- LAB HACK: internet access through the upstream router ---
+# In production, the upstream router IS the DC edge with real internet.
+# In the lab, it has no internet — route through its mgmt interface (eth0)
+# to the libvirt bridge, which NATs via the hypervisor.
+# The net-node's default route goes through the upstream router so all
+# fabric-originated traffic (mgmt VM, workers) follows the production path.
+docker exec "$UPSTREAM_ROUTER" iptables -t nat -C POSTROUTING -o eth0 -j MASQUERADE 2>/dev/null || \
+    docker exec "$UPSTREAM_ROUTER" iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+docker exec "$NET_NODE" ip route replace default via ${BGP_UPSTREAM_IP%/*} dev eth2
+echo "  Lab hack: net-node default route via upstream-router, u/s MASQUERADE → eth0"
 
 # Add static route on the host so that public IPs (used in tenant kubeconfigs)
 # are routed through the lab fabric instead of the internet.
