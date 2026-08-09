@@ -586,6 +586,10 @@ echo "  Installed iptables, iproute2, python3, openssh (sshd running), frr"
 docker exec "$NET_NODE" ip addr replace 10.0.0.30/24 dev eth1
 echo "  net-node:eth1 = 10.0.0.30/24 (native VLAN)"
 
+docker exec "$NET_NODE" iptables -t nat -C POSTROUTING -s 10.0.0.0/24 -o eth2 -j MASQUERADE 2>/dev/null || \
+    docker exec "$NET_NODE" iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -o eth2 -j MASQUERADE
+echo "  net-node: MASQUERADE 10.0.0.0/24 → eth2 (mgmt VM internet via upstream router)"
+
 # ---------- step 17: configure BGP peering ----------
 
 info "Configuring BGP peering link..."
