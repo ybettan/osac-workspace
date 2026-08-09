@@ -118,6 +118,9 @@ if [ "${1:-}" = "destroy" ]; then
         info "  Removed mgmt-server"
     fi
 
+    # Remove host static routes
+    ip route del 192.168.100.0/24 2>/dev/null || true
+
     # Remove iptables FORWARD rules
     iptables -D FORWARD -s 192.168.0.0/16 -j ACCEPT 2>/dev/null || true
     iptables -D FORWARD -d 192.168.0.0/16 -j ACCEPT 2>/dev/null || true
