@@ -546,12 +546,12 @@ KUBECONFIG="$KUBECONFIG" oc debug "node/$MGMT_NODE" -- \
     nsenter -a -t 1 -- bash -c "
         if nmcli connection show fabric-native &>/dev/null; then
             nmcli connection modify fabric-native \
-                ipv4.gateway 10.0.0.30 ipv4.route-metric 50
+                ipv4.gateway 10.0.0.30 ipv4.route-metric 10
             nmcli connection up fabric-native 2>/dev/null
         else
             nmcli connection add type ethernet ifname $FABRIC_NIC con-name fabric-native \
                 ipv4.method manual ipv4.addresses 10.0.0.10/24 \
-                ipv4.gateway 10.0.0.30 ipv4.route-metric 50 \
+                ipv4.gateway 10.0.0.30 ipv4.route-metric 10 \
                 ipv6.method disabled
             nmcli connection up fabric-native
         fi
