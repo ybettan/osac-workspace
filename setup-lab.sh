@@ -541,18 +541,22 @@ MGMT_NODE=$(KUBECONFIG="$KUBECONFIG" oc get nodes -o name | head -1 | cut -d/ -f
 FABRIC_NIC=$(KUBECONFIG="$KUBECONFIG" oc debug "node/$MGMT_NODE" -- \
     nsenter -t 1 -n ip -o link show 2>&1 | grep "$FABRIC_MAC" | awk -F'[ :]+' '{print $2}')
 
-info "Assigning native VLAN IP on mgmt VM data NIC ($FABRIC_NIC)..."
+info "Configuring mgmt VM fabric NIC ($FABRIC_NIC) with net-node as gateway..."
 KUBECONFIG="$KUBECONFIG" oc debug "node/$MGMT_NODE" -- \
     nsenter -a -t 1 -- bash -c "
         if nmcli connection show fabric-native &>/dev/null; then
+            nmcli connection modify fabric-native \
+                ipv4.gateway 10.0.0.30 ipv4.route-metric 50
             nmcli connection up fabric-native 2>/dev/null
         else
             nmcli connection add type ethernet ifname $FABRIC_NIC con-name fabric-native \
-                ipv4.method manual ipv4.addresses 10.0.0.10/24 ipv6.method disabled
+                ipv4.method manual ipv4.addresses 10.0.0.10/24 \
+                ipv4.gateway 10.0.0.30 ipv4.route-metric 50 \
+                ipv6.method disabled
             nmcli connection up fabric-native
         fi
     "
-echo "  mgmt VM $FABRIC_NIC = 10.0.0.10/24 (native VLAN)"
+echo "  mgmt VM $FABRIC_NIC = 10.0.0.10/24, gateway 10.0.0.30 (net-node)"
 
 KUBECONFIG="$KUBECONFIG" oc patch l2advertisement caas-l2-advertisement -n metallb-system \
     --type=merge -p "{\"spec\":{\"interfaces\":[\"$FABRIC_NIC\"]}}"
