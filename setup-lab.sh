@@ -224,22 +224,23 @@ else
     info "DNS forwarding (layer 1) already fixed — skipping"
 fi
 
-# Fix B: bypass cluster-tool DNS wildcard for internal cluster queries.
+# Fix B: replace cluster-tool's broad DNS wildcard with specific entries.
 # cluster-tool creates address=/<cluster-domain>/<public-ip> which catches
-# ALL subdomains. With ndots:5, pods try search domains before the name
-# as-is, so keycloak.keycloak.svc.cluster.local gets looked up as
-# keycloak.keycloak.svc.cluster.local.<cluster-domain> — matching the
-# wildcard and returning the hypervisor IP instead of the ClusterIP.
-# Add server= bypasses so dnsmasq forwards these to real DNS (which
-# returns NXDOMAIN), allowing the pod resolver to try the name as-is.
+# ALL subdomains. With ndots:5, pod DNS appends the cluster domain as a
+# search suffix — any short hostname (github.com, keycloak.svc.cluster.local)
+# matches the wildcard and resolves to the hypervisor IP.
+# Replace with specific entries for *.apps.*, api.*, and api-int.* only.
 NM_DNSMASQ_CONF="/etc/NetworkManager/dnsmasq.d/cluster-${MGMT_CLONE_NAME}.conf"
 CLUSTER_DOMAIN="test-infra-cluster-${MGMT_CLONE_NAME}.redhat.com"
-HOSTED_DOMAIN="hosted.${CLUSTER_DOMAIN}"
+PUBLIC_IP=$(hostname -I | awk '{print $1}')
 
-if [ -f "$NM_DNSMASQ_CONF" ] && ! grep -q "svc.cluster.local" "$NM_DNSMASQ_CONF" 2>/dev/null; then
-    info "Bypassing DNS wildcard for cluster-internal and hosted queries..."
-    echo "server=/${HOSTED_DOMAIN}/8.8.8.8" >> "$NM_DNSMASQ_CONF"
-    echo "server=/svc.cluster.local.${CLUSTER_DOMAIN}/8.8.8.8" >> "$NM_DNSMASQ_CONF"
+if [ -f "$NM_DNSMASQ_CONF" ] && grep -q "^address=/${CLUSTER_DOMAIN}/" "$NM_DNSMASQ_CONF" 2>/dev/null; then
+    info "Replacing broad DNS wildcard with specific entries..."
+    cat > "$NM_DNSMASQ_CONF" <<EOF
+address=/.apps.${CLUSTER_DOMAIN}/${PUBLIC_IP}
+address=/api.${CLUSTER_DOMAIN}/${PUBLIC_IP}
+address=/api-int.${CLUSTER_DOMAIN}/${PUBLIC_IP}
+EOF
     systemctl restart NetworkManager
 else
     info "DNS forwarding (layer 2) already fixed — skipping"
