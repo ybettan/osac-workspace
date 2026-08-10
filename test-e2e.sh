@@ -107,9 +107,77 @@ for name in "${CLUSTER_NAMES[@]}"; do
     CLUSTER_IDS+=("$CLUSTER_ID")
 done
 
+# ---------- step 1b: fix DNS for hosted cluster pods ----------
+#
+# Two DNS fixes needed after clusters are created:
+#
+# 1. The libvirt dnsmasq *.apps wildcard resolves to the management VM's
+#    management NIC IP (192.168.162.x). After NMState, pods route via the
+#    data NIC and can't reach that IP. Rewrite to the fabric IP (10.0.0.10).
+#    This must happen AFTER agent boot (agents need *.apps on the mgmt net
+#    to download the rootfs image during initial boot).
+#
+# 2. CoreDNS pods run inside OVN and forward DNS to the worker's
+#    /etc/resolv.conf (192.168.162.1, libvirt dnsmasq). OVN traffic exits
+#    via the data NIC default route, which has no path to the management
+#    network. With hostNetwork, CoreDNS can reach the DNS server directly
+#    on the management NIC (L2 adjacent).
+
+MGMT_CLONE_NAME="agentless-lab-mgmt"
+MGMT_LIBVIRT_NET="test-infra-net-${MGMT_CLONE_NAME}"
+DNSMASQ_CONF="/var/lib/libvirt/dnsmasq/${MGMT_LIBVIRT_NET}.conf"
+MGMT_FABRIC_IP="10.0.0.10"
+
+info "Fixing DNS *.apps to resolve to fabric IP (${MGMT_FABRIC_IP})..."
+if grep -q "address=/.apps\..*/${MGMT_FABRIC_IP}" "$DNSMASQ_CONF" 2>/dev/null; then
+    echo "  Already fixed — skipping"
+else
+    sed -i "s|address=/.apps\.\(.*\)/.*|address=/.apps.\1/${MGMT_FABRIC_IP}|" "$DNSMASQ_CONF"
+    if [ -f /var/run/libvirt/network/${MGMT_LIBVIRT_NET}.pid ]; then
+        xargs kill < /var/run/libvirt/network/${MGMT_LIBVIRT_NET}.pid 2>/dev/null || true
+        sleep 1
+        DNSMASQ_BRIDGE=$(virsh net-info "$MGMT_LIBVIRT_NET" 2>/dev/null | awk '/^Bridge:/{print $2}')
+        DNSMASQ_INTERFACE="$DNSMASQ_BRIDGE" /usr/sbin/dnsmasq \
+            --conf-file="$DNSMASQ_CONF" --leasefile-ro \
+            --dhcp-script=/usr/libexec/libvirt_leaseshelper
+        pgrep -f "dnsmasq.*${MGMT_LIBVIRT_NET}" > "/var/run/libvirt/network/${MGMT_LIBVIRT_NET}.pid"
+    fi
+    echo "  Updated libvirt dnsmasq"
+fi
+
 # ---------- step 2: wait for clusters to be ready ----------
+#
+# While polling, patch CoreDNS to use hostNetwork on each hosted cluster
+# once it becomes available. CoreDNS deploys after the worker joins, so
+# we can't do this before the wait loop.
+
+patch_coredns() {
+    local order_name="$1"
+    local hc_ns="${OSAC_NS}-${order_name}"
+    local kc_secret="${order_name}-admin-kubeconfig"
+    local guest_kc
+    guest_kc=$(mktemp)
+
+    oc get secret "$kc_secret" -n "$hc_ns" -o jsonpath='{.data.kubeconfig}' 2>/dev/null | base64 -d > "$guest_kc" 2>/dev/null
+    if [ ! -s "$guest_kc" ]; then
+        rm -f "$guest_kc"
+        return 1
+    fi
+
+    if ! KUBECONFIG="$guest_kc" oc get ds dns-default -n openshift-dns &>/dev/null 2>&1; then
+        rm -f "$guest_kc"
+        return 1
+    fi
+
+    KUBECONFIG="$guest_kc" oc patch daemonset dns-default -n openshift-dns \
+        --type=strategic -p '{"spec":{"template":{"spec":{"hostNetwork":true}}}}' 2>/dev/null
+    echo "  Patched CoreDNS hostNetwork on $order_name"
+    rm -f "$guest_kc"
+    return 0
+}
 
 info "Waiting for clusters to reach READY state (this may take 30-60 minutes)..."
+COREDNS_PATCHED=""
 for i in "${!CLUSTER_NAMES[@]}"; do
     name="${CLUSTER_NAMES[$i]}"
     id="${CLUSTER_IDS[$i]}"
@@ -134,6 +202,15 @@ for i in "${!CLUSTER_NAMES[@]}"; do
         for vm in host-1 host-2 host-3; do
             if virsh domstate "$vm" 2>/dev/null | grep -q "shut off"; then
                 virsh start "$vm" 2>/dev/null && echo "  Restarted $vm (powered off by installer)"
+            fi
+        done
+
+        # Patch CoreDNS to hostNetwork once worker joins (one-shot per cluster)
+        for ORDER_NAME in $(oc get clusterorder -n "$OSAC_NS" --no-headers -o custom-columns='NAME:.metadata.name' 2>/dev/null); do
+            if ! echo "$COREDNS_PATCHED" | grep -qw "$ORDER_NAME"; then
+                if patch_coredns "$ORDER_NAME"; then
+                    COREDNS_PATCHED="$COREDNS_PATCHED $ORDER_NAME"
+                fi
             fi
         done
 
