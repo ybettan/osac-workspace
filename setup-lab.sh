@@ -752,12 +752,8 @@ info "Discovery ISO URL ready"
 mkdir -p "$VM_DIR"
 
 ISO_FILE="${VM_DIR}/discovery.iso"
-if [ -f "$ISO_FILE" ]; then
-    info "Discovery ISO already downloaded — skipping"
-else
-    info "Downloading discovery ISO..."
-    curl -k -L --fail-with-body -o "$ISO_FILE" "$ISO_URL"
-fi
+info "Downloading discovery ISO..."
+curl -k -L --fail-with-body -o "$ISO_FILE" "$ISO_URL"
 
 info "Creating bridges and booting host VMs..."
 for i in "${!HOST_VMS[@]}"; do
