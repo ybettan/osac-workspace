@@ -10,7 +10,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INSTALLER_DIR="${SCRIPT_DIR}/osac-installer"
+INSTALLER_DIR="${SCRIPT_DIR}/osac/osac-installer"
 PULL_SECRET="${INSTALLER_DIR}/values/agentless-net-lab/pull-secret.json"
 MGMT_CLONE_NAME="agentless-lab-mgmt"
 KUBECONFIG_PATH="$HOME/.kube/${MGMT_CLONE_NAME}.kubeconfig"

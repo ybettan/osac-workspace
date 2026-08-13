@@ -18,7 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # mgmt-server
 MGMT_CLONE_NAME="agentless-lab-mgmt"
 MGMT_IMAGE="${MGMT_IMAGE:-quay.io/osac-project/cluster-flavors:caas-4-22}"
-INSTALLER_DIR="${SCRIPT_DIR}/osac-installer"
+INSTALLER_DIR="${SCRIPT_DIR}/osac/osac-installer"
 PULL_SECRET="${INSTALLER_DIR}/values/agentless-net-lab/pull-secret.json"
 
 # Containerlab
@@ -52,7 +52,7 @@ INFRAENV_NAME="infraenv"
 SSH_PUB_KEY="$(cat ~/.ssh/id_rsa.pub 2>/dev/null || cat ~/.ssh/id_ed25519.pub 2>/dev/null || true)"
 
 # Ansible paths
-OSAC_AAP_DIR="${OSAC_AAP_DIR:-${SCRIPT_DIR}/osac-aap}"
+OSAC_AAP_DIR="${OSAC_AAP_DIR:-${SCRIPT_DIR}/osac/osac-aap}"
 export ANSIBLE_COLLECTIONS_PATH="${OSAC_AAP_DIR}/collections:${OSAC_AAP_DIR}/vendor"
 INVENTORY="${SCRIPT_DIR}/ansible/inventory.yml"
 
@@ -270,15 +270,6 @@ KUBECONFIG="$KUBECONFIG" oc debug node/"$(KUBECONFIG="$KUBECONFIG" oc get node -
 # OSAC REFRESH (bring snapshot cluster back to life)
 # ============================================================
 
-# ---------- step 6: init osac-installer submodules ----------
-
-if [ -d "$INSTALLER_DIR/base/osac-operator/.git" ]; then
-    info "osac-installer submodules already initialized — skipping"
-else
-    info "Initializing osac-installer submodules..."
-    git -C "$INSTALLER_DIR" submodule update --init --recursive
-fi
-
 # ---------- step 7: remove stale APIService ----------
 #
 # The snapshot registers an APIService for console.osac.openshift.io backed by
@@ -410,15 +401,13 @@ else:
     print('  Already patched — skipping')
 " "$AAP_TOKEN" "$AAP_ROUTE"
 
-# ---------- step 11b: patch AAP project to use fork ----------
+# ---------- step 11b: patch AAP project to use upstream ----------
 #
-# The snapshot's AAP project points to osac-project/osac-aap at a pinned
-# commit. Override it to use the agentless-net branch from the fork which
-# has the hostNetwork fix and agentless_net collection updates.
-# Goes away once the changes are merged upstream.
+# The snapshot's AAP project may point to a stale commit.
+# Override it to use the latest upstream main.
 
-AAP_PROJECT_GIT_URI="https://github.com/ybettan/osac-aap"
-AAP_PROJECT_GIT_BRANCH="agentless-net"
+AAP_PROJECT_GIT_URI="https://github.com/osac-project/osac"
+AAP_PROJECT_GIT_BRANCH="main"
 
 info "Patching AAP project to ${AAP_PROJECT_GIT_URI} (${AAP_PROJECT_GIT_BRANCH})..."
 python3 -c "
