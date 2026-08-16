@@ -401,13 +401,14 @@ else:
     print('  Already patched — skipping')
 " "$AAP_TOKEN" "$AAP_ROUTE"
 
-# ---------- step 11b: patch AAP project to use upstream ----------
+# ---------- step 11b: patch AAP project to use fork ----------
 #
 # The snapshot's AAP project may point to a stale commit.
-# Override it to use the latest upstream main.
+# Override to use the fork branch which has the hostNetwork fix
+# for runner pods (needed for lab SSH to containerlab nodes).
 
-AAP_PROJECT_GIT_URI="https://github.com/osac-project/osac"
-AAP_PROJECT_GIT_BRANCH="main"
+AAP_PROJECT_GIT_URI="https://github.com/ybettan/osac"
+AAP_PROJECT_GIT_BRANCH="agentless-net-lab"
 
 info "Patching AAP project to ${AAP_PROJECT_GIT_URI} (${AAP_PROJECT_GIT_BRANCH})..."
 python3 -c "
@@ -476,6 +477,115 @@ urllib.request.urlopen(req, context=ctx)
         exit 1
     fi
 done
+
+# ---------- step 11c: patch AAP execution environment image ----------
+#
+# The snapshot's EE image is pinned to a stale SHA.
+# Update to latest so automation jobs use current collections.
+
+AAP_EE_IMAGE="ghcr.io/osac-project/osac-aap:latest"
+
+info "Patching AAP execution environment to ${AAP_EE_IMAGE}..."
+python3 -c "
+import json, urllib.request, ssl, sys
+
+token, route, ee_image = sys.argv[1:4]
+ctx = ssl.create_default_context()
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
+
+# Find the osac-ee execution environment
+req = urllib.request.Request(
+    f'https://{route}/api/controller/v2/execution_environments/',
+    headers={'Authorization': f'Bearer {token}'})
+ees = json.loads(urllib.request.urlopen(req, context=ctx).read())
+osac_ee = next((ee for ee in ees['results'] if ee['name'] == 'osac-ee'), None)
+if not osac_ee:
+    print('  WARN: osac-ee not found')
+    sys.exit(0)
+
+if osac_ee['image'] == ee_image:
+    print('  Already up to date — skipping')
+else:
+    data = json.dumps({'image': ee_image}).encode()
+    req = urllib.request.Request(
+        f'https://{route}/api/controller/v2/execution_environments/{osac_ee[\"id\"]}/',
+        data=data, method='PATCH',
+        headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'})
+    urllib.request.urlopen(req, context=ctx)
+    print(f'  Updated from {osac_ee[\"image\"]} to {ee_image}')
+" "$AAP_TOKEN" "$AAP_ROUTE" "$AAP_EE_IMAGE"
+
+# ---------- step 11d: fix config-as-code template path and re-run ----------
+#
+# The snapshot's job templates reference playbooks at the repo root.
+# In the mono-repo they live under osac-aap/. Fix the config-as-code
+# template first (chicken-and-egg), then run it to update all others.
+
+info "Fixing config-as-code template playbook path..."
+python3 -c "
+import json, urllib.request, ssl, sys
+
+token, route = sys.argv[1], sys.argv[2]
+ctx = ssl.create_default_context()
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
+
+# Check current config-as-code template
+req = urllib.request.Request(
+    f'https://{route}/api/controller/v2/job_templates/18/',
+    headers={'Authorization': f'Bearer {token}'})
+jt = json.loads(urllib.request.urlopen(req, context=ctx).read())
+
+expected = 'osac-aap/playbook_osac_config_as_code.yml'
+if jt['playbook'] == expected:
+    print('  Already correct — skipping')
+    sys.exit(0)
+
+data = json.dumps({'playbook': expected}).encode()
+req = urllib.request.Request(
+    f'https://{route}/api/controller/v2/job_templates/18/',
+    data=data, method='PATCH',
+    headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'})
+urllib.request.urlopen(req, context=ctx)
+print(f'  Fixed: {jt[\"playbook\"]} -> {expected}')
+" "$AAP_TOKEN" "$AAP_ROUTE"
+
+info "Running config-as-code to update all job template paths..."
+python3 -c "
+import json, urllib.request, ssl, sys, time
+
+token, route = sys.argv[1], sys.argv[2]
+ctx = ssl.create_default_context()
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
+
+# Launch
+req = urllib.request.Request(
+    f'https://{route}/api/controller/v2/job_templates/18/launch/',
+    data=b'{}', method='POST',
+    headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'})
+job = json.loads(urllib.request.urlopen(req, context=ctx).read())
+job_id = job['id']
+print(f'  Launched job {job_id}')
+
+# Poll
+for _ in range(60):
+    time.sleep(5)
+    req = urllib.request.Request(
+        f'https://{route}/api/controller/v2/jobs/{job_id}/',
+        headers={'Authorization': f'Bearer {token}'})
+    status = json.loads(urllib.request.urlopen(req, context=ctx).read())['status']
+    if status == 'successful':
+        print('  Config-as-code completed')
+        break
+    if status in ('failed', 'error'):
+        print(f'  ERROR: config-as-code {status}')
+        sys.exit(1)
+else:
+    print('  ERROR: config-as-code timed out')
+    sys.exit(1)
+" "$AAP_TOKEN" "$AAP_ROUTE"
 
 # ============================================================
 # CONTAINERLAB (switch fabric + network nodes)
